@@ -11,7 +11,7 @@ import (
 )
 
 func (p *Provisioner) ensureTopic(ctx context.Context, topic config.Topic, strategy string) error {
-	topics, err := p.admin.Admin.ListTopics(ctx, topic.Name)
+	topics, err := p.admin.ListTopics(ctx, topic.Name)
 	if err != nil {
 		return fmt.Errorf("listing topics: %w", err)
 	}
@@ -48,7 +48,7 @@ func (p *Provisioner) createTopic(ctx context.Context, topic config.Topic) error
 	)
 
 	configs := toStringPtrMap(topic.Config)
-	resp, err := p.admin.Admin.CreateTopics(ctx, partitions, replicationFactor, configs, topic.Name)
+	resp, err := p.admin.CreateTopics(ctx, partitions, replicationFactor, configs, topic.Name)
 	if err != nil {
 		return fmt.Errorf("creating topic: %w", err)
 	}
@@ -80,7 +80,7 @@ func (p *Provisioner) updateTopic(ctx context.Context, topic config.Topic, exist
 				"from", currentPartitions,
 				"to", desired,
 			)
-			resp, err := p.admin.Admin.UpdatePartitions(ctx, int(desired), topic.Name)
+			resp, err := p.admin.UpdatePartitions(ctx, int(desired), topic.Name)
 			if err != nil {
 				return fmt.Errorf("updating partitions: %w", err)
 			}
@@ -98,7 +98,7 @@ func (p *Provisioner) updateTopic(ctx context.Context, topic config.Topic, exist
 	}
 
 	// Get current config to compare
-	resourceCfgs, err := p.admin.Admin.DescribeTopicConfigs(ctx, topic.Name)
+	resourceCfgs, err := p.admin.DescribeTopicConfigs(ctx, topic.Name)
 	if err != nil {
 		return fmt.Errorf("describing topic configs: %w", err)
 	}
@@ -139,7 +139,7 @@ func (p *Provisioner) updateTopic(ctx context.Context, topic config.Topic, exist
 		return nil
 	}
 
-	resp, err := p.admin.Admin.AlterTopicConfigs(ctx, alters, topic.Name)
+	resp, err := p.admin.AlterTopicConfigs(ctx, alters, topic.Name)
 	if err != nil {
 		return fmt.Errorf("altering topic configs: %w", err)
 	}

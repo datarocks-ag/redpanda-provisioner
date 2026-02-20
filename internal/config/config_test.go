@@ -258,6 +258,367 @@ func TestValidateNullByte(t *testing.T) {
 	}
 }
 
+func TestValidateSchemaMissingSubject(t *testing.T) {
+	yaml := `
+schemas:
+  - type: avro
+    file: test.avsc
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing schema subject")
+	}
+}
+
+func TestValidateSchemaMissingFile(t *testing.T) {
+	yaml := `
+schemas:
+  - subject: test-value
+    type: avro
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing schema file")
+	}
+}
+
+func TestValidateSchemaDuplicateSubject(t *testing.T) {
+	yaml := `
+schemas:
+  - subject: test-value
+    type: avro
+    file: a.avsc
+  - subject: test-value
+    type: avro
+    file: b.avsc
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for duplicate schema subject")
+	}
+}
+
+func TestValidateSchemaInvalidCompatibility(t *testing.T) {
+	yaml := `
+schemas:
+  - subject: test-value
+    type: avro
+    file: test.avsc
+    compatibility: INVALID
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid compatibility")
+	}
+}
+
+func TestValidateSchemaNullByteSubject(t *testing.T) {
+	yaml := "schemas:\n  - subject: \"test\\x00value\"\n    type: avro\n    file: test.avsc\n"
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for null byte in schema subject")
+	}
+}
+
+func TestValidateSchemaNullByteFile(t *testing.T) {
+	yaml := "schemas:\n  - subject: test-value\n    type: avro\n    file: \"test\\x00.avsc\"\n"
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for null byte in schema file")
+	}
+}
+
+func TestValidateUserMissingUsername(t *testing.T) {
+	yaml := `
+users:
+  - password: pass
+    mechanism: SCRAM-SHA-256
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing username")
+	}
+}
+
+func TestValidateUserMissingPassword(t *testing.T) {
+	yaml := `
+users:
+  - username: svc
+    mechanism: SCRAM-SHA-256
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing password")
+	}
+}
+
+func TestValidateUserMissingMechanism(t *testing.T) {
+	yaml := `
+users:
+  - username: svc
+    password: pass
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing mechanism")
+	}
+}
+
+func TestValidateUserDuplicateUsername(t *testing.T) {
+	yaml := `
+users:
+  - username: svc
+    password: pass1
+    mechanism: SCRAM-SHA-256
+  - username: svc
+    password: pass2
+    mechanism: SCRAM-SHA-256
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for duplicate username")
+	}
+}
+
+func TestValidateUserNullByteUsername(t *testing.T) {
+	yaml := "users:\n  - username: \"svc\\x00name\"\n    password: pass\n    mechanism: SCRAM-SHA-256\n"
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for null byte in username")
+	}
+}
+
+func TestValidateACLMissingPrincipal(t *testing.T) {
+	yaml := `
+acls:
+  - operations: [read]
+    resource_type: topic
+    resource_name: orders
+    pattern: literal
+    permission: allow
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing principal")
+	}
+}
+
+func TestValidateACLMissingResourceType(t *testing.T) {
+	yaml := `
+acls:
+  - principal: "User:svc"
+    operations: [read]
+    resource_name: orders
+    pattern: literal
+    permission: allow
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing resource_type")
+	}
+}
+
+func TestValidateACLInvalidResourceType(t *testing.T) {
+	yaml := `
+acls:
+  - principal: "User:svc"
+    operations: [read]
+    resource_type: invalid
+    resource_name: orders
+    pattern: literal
+    permission: allow
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid resource_type")
+	}
+}
+
+func TestValidateACLMissingResourceName(t *testing.T) {
+	yaml := `
+acls:
+  - principal: "User:svc"
+    operations: [read]
+    resource_type: topic
+    pattern: literal
+    permission: allow
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing resource_name")
+	}
+}
+
+func TestValidateACLMissingPattern(t *testing.T) {
+	yaml := `
+acls:
+  - principal: "User:svc"
+    operations: [read]
+    resource_type: topic
+    resource_name: orders
+    permission: allow
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing pattern")
+	}
+}
+
+func TestValidateACLInvalidPattern(t *testing.T) {
+	yaml := `
+acls:
+  - principal: "User:svc"
+    operations: [read]
+    resource_type: topic
+    resource_name: orders
+    pattern: wildcard
+    permission: allow
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid pattern")
+	}
+}
+
+func TestValidateACLMissingPermission(t *testing.T) {
+	yaml := `
+acls:
+  - principal: "User:svc"
+    operations: [read]
+    resource_type: topic
+    resource_name: orders
+    pattern: literal
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing permission")
+	}
+}
+
+func TestValidateACLInvalidPermission(t *testing.T) {
+	yaml := `
+acls:
+  - principal: "User:svc"
+    operations: [read]
+    resource_type: topic
+    resource_name: orders
+    pattern: literal
+    permission: maybe
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid permission")
+	}
+}
+
+func TestValidateACLNullBytePrincipal(t *testing.T) {
+	yaml := "acls:\n  - principal: \"User\\x00svc\"\n    operations: [read]\n    resource_type: topic\n    resource_name: orders\n    pattern: literal\n    permission: allow\n"
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for null byte in principal")
+	}
+}
+
+func TestValidateACLNullByteResourceName(t *testing.T) {
+	yaml := "acls:\n  - principal: \"User:svc\"\n    operations: [read]\n    resource_type: topic\n    resource_name: \"orders\\x00name\"\n    pattern: literal\n    permission: allow\n"
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for null byte in resource_name")
+	}
+}
+
+func TestValidateTopicInvalidStrategy(t *testing.T) {
+	yaml := `
+topics:
+  - name: test
+    partitions: 1
+    strategy: delete
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid per-topic strategy")
+	}
+}
+
+func TestValidateReplicationFactorMinimum(t *testing.T) {
+	yaml := `
+topics:
+  - name: test
+    partitions: 1
+    replication_factor: 0
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for replication_factor < 1")
+	}
+}
+
+func TestLoadFileNotFound(t *testing.T) {
+	_, err := Load("/nonexistent/path/config.yaml")
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestLoadInvalidYAML(t *testing.T) {
+	yaml := `
+topics:
+  - name: [invalid yaml
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestLoadEmptyConfig(t *testing.T) {
+	path := writeTempConfig(t, "")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Topics) != 0 {
+		t.Errorf("expected 0 topics, got %d", len(cfg.Topics))
+	}
+}
+
+func TestValidateSchemaTypeMissing(t *testing.T) {
+	yaml := `
+schemas:
+  - subject: test-value
+    file: test.avsc
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for missing schema type")
+	}
+}
+
 func TestEffectiveStrategy(t *testing.T) {
 	tests := []struct {
 		strategies []string

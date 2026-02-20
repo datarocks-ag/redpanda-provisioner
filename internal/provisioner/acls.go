@@ -66,7 +66,7 @@ func (p *Provisioner) ensureACL(ctx context.Context, acl config.ACL) error {
 			builder.TransactionalIDs(acl.ResourceName)
 		}
 
-		results, err := p.admin.Admin.CreateACLs(ctx, builder)
+		results, err := p.admin.CreateACLs(ctx, builder)
 		if err != nil {
 			return fmt.Errorf("creating ACL: %w", err)
 		}
