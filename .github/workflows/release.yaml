@@ -2,7 +2,6 @@ name: Release redpanda-provisioner
 
 on:
   push:
-    branches: [develop]
     tags: ['v*']
 
 env:
@@ -54,6 +53,14 @@ jobs:
         with:
           files: coverage.out
           fail_ci_if_error: false
+
+      - name: Create and publish test coverage badge
+        uses: vladopajic/go-test-coverage@v2
+        with:
+          profile: coverage.out
+          threshold-total: 75
+          git-token: ${{ github.ref_name == 'develop' && secrets.GITHUB_TOKEN || '' }}
+          git-branch: badges
 
   test-integration:
     name: Integration Test
