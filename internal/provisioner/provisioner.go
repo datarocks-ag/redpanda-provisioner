@@ -5,19 +5,38 @@ import (
 	"fmt"
 	"log/slog"
 
-	"redpanda-provisioner/internal/client"
+	"github.com/twmb/franz-go/pkg/kadm"
+
 	"redpanda-provisioner/internal/config"
 )
 
+// KafkaAdmin defines the Kafka admin operations needed by the provisioner.
+type KafkaAdmin interface {
+	ListTopics(ctx context.Context, topics ...string) (kadm.TopicDetails, error)
+	CreateTopics(ctx context.Context, partitions int32, replicationFactor int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error)
+	UpdatePartitions(ctx context.Context, partitions int, topics ...string) (kadm.CreatePartitionsResponses, error)
+	DescribeTopicConfigs(ctx context.Context, topics ...string) (kadm.ResourceConfigs, error)
+	AlterTopicConfigs(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error)
+	AlterUserSCRAMs(ctx context.Context, del []kadm.DeleteSCRAM, upsert []kadm.UpsertSCRAM) (kadm.AlteredUserSCRAMs, error)
+	CreateACLs(ctx context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error)
+}
+
+// SchemaRegistry defines the schema registry operations needed by the provisioner.
+type SchemaRegistry interface {
+	RegisterSchema(ctx context.Context, subject, schemaType, schema string) (int, error)
+	GetCompatibility(ctx context.Context, subject string) (string, error)
+	SetCompatibility(ctx context.Context, subject, level string) error
+}
+
 // Provisioner orchestrates idempotent Redpanda resource provisioning.
 type Provisioner struct {
-	admin  *client.AdminClient
-	schema *client.SchemaRegistryClient
+	admin  KafkaAdmin
+	schema SchemaRegistry
 	cfg    *config.Config
 }
 
 // New creates a new Provisioner.
-func New(admin *client.AdminClient, schema *client.SchemaRegistryClient, cfg *config.Config) *Provisioner {
+func New(admin KafkaAdmin, schema SchemaRegistry, cfg *config.Config) *Provisioner {
 	return &Provisioner{
 		admin:  admin,
 		schema: schema,

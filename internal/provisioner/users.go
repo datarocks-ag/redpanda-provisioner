@@ -31,7 +31,7 @@ func (p *Provisioner) ensureUser(ctx context.Context, user config.User) error {
 		Password:  user.Password,
 	}
 
-	resp, err := p.admin.Admin.AlterUserSCRAMs(ctx, []kadm.DeleteSCRAM{}, []kadm.UpsertSCRAM{upsert})
+	resp, err := p.admin.AlterUserSCRAMs(ctx, []kadm.DeleteSCRAM{}, []kadm.UpsertSCRAM{upsert})
 	if err != nil {
 		return fmt.Errorf("upserting SCRAM user: %w", err)
 	}
