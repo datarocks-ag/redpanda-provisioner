@@ -1,0 +1,47 @@
+# Strategy: "update" (default) creates or updates resources.
+#           "create" only creates if missing, skips existing.
+# Set globally or per topic (topic strategy overrides global).
+# strategy: "update"
+
+topics:
+  - name: orders
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: "259200000"
+      cleanup.policy: delete
+      min.insync.replicas: "2"
+      compression.type: zstd
+
+  - name: user-state
+    partitions: 6
+    replication_factor: 3
+    config:
+      cleanup.policy: compact
+      min.insync.replicas: "2"
+
+schemas:
+  - subject: orders-value
+    type: avro
+    file: schemas/orders.avsc
+    compatibility: BACKWARD
+
+users:
+  - username: orders-service
+    password: ${ORDERS_SERVICE_PASSWORD}
+    mechanism: SCRAM-SHA-256
+
+acls:
+  - principal: "User:orders-service"
+    operations: [write, describe]
+    resource_type: topic
+    resource_name: orders
+    pattern: literal
+    permission: allow
+
+  - principal: "User:orders-service"
+    operations: [read, describe]
+    resource_type: group
+    resource_name: order-processors
+    pattern: literal
+    permission: allow

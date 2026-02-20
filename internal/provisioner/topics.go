@@ -1,0 +1,165 @@
+package provisioner
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/twmb/franz-go/pkg/kadm"
+
+	"redpanda-provisioner/internal/config"
+)
+
+func (p *Provisioner) ensureTopic(ctx context.Context, topic config.Topic, strategy string) error {
+	topics, err := p.admin.Admin.ListTopics(ctx, topic.Name)
+	if err != nil {
+		return fmt.Errorf("listing topics: %w", err)
+	}
+
+	existing, exists := topics[topic.Name]
+
+	if !exists || existing.Err != nil {
+		return p.createTopic(ctx, topic)
+	}
+
+	if strategy == "create" {
+		slog.Info("Skipping existing topic (strategy=create)", "topic", topic.Name)
+		return nil
+	}
+
+	return p.updateTopic(ctx, topic, existing)
+}
+
+func (p *Provisioner) createTopic(ctx context.Context, topic config.Topic) error {
+	partitions := int32(1)
+	if topic.Partitions != nil {
+		partitions = *topic.Partitions
+	}
+
+	replicationFactor := int16(1)
+	if topic.ReplicationFactor != nil {
+		replicationFactor = *topic.ReplicationFactor
+	}
+
+	slog.Info("Creating topic",
+		"topic", topic.Name,
+		"partitions", partitions,
+		"replication_factor", replicationFactor,
+	)
+
+	configs := toStringPtrMap(topic.Config)
+	resp, err := p.admin.Admin.CreateTopics(ctx, partitions, replicationFactor, configs, topic.Name)
+	if err != nil {
+		return fmt.Errorf("creating topic: %w", err)
+	}
+
+	for _, r := range resp {
+		if r.Err != nil {
+			return fmt.Errorf("creating topic %q: %w", r.Topic, r.Err)
+		}
+	}
+
+	return nil
+}
+
+func (p *Provisioner) updateTopic(ctx context.Context, topic config.Topic, existing kadm.TopicDetail) error {
+	// Check partition count — can only increase, never decrease
+	currentPartitions := int32(len(existing.Partitions))
+
+	if topic.Partitions != nil {
+		desired := *topic.Partitions
+		if desired < currentPartitions {
+			slog.Warn("Topic has more partitions than configured (cannot decrease)",
+				"topic", topic.Name,
+				"current", currentPartitions,
+				"desired", desired,
+			)
+		} else if desired > currentPartitions {
+			slog.Info("Increasing topic partitions",
+				"topic", topic.Name,
+				"from", currentPartitions,
+				"to", desired,
+			)
+			resp, err := p.admin.Admin.UpdatePartitions(ctx, int(desired), topic.Name)
+			if err != nil {
+				return fmt.Errorf("updating partitions: %w", err)
+			}
+			for _, r := range resp {
+				if r.Err != nil {
+					return fmt.Errorf("updating partitions for %q: %w", r.Topic, r.Err)
+				}
+			}
+		}
+	}
+
+	// Update topic configs if they differ
+	if len(topic.Config) == 0 {
+		return nil
+	}
+
+	// Get current config to compare
+	resourceCfgs, err := p.admin.Admin.DescribeTopicConfigs(ctx, topic.Name)
+	if err != nil {
+		return fmt.Errorf("describing topic configs: %w", err)
+	}
+
+	currentConfigs := make(map[string]string)
+	for _, rc := range resourceCfgs {
+		if rc.Err != nil {
+			return fmt.Errorf("describing config for topic %q: %w", topic.Name, rc.Err)
+		}
+		for _, entry := range rc.Configs {
+			if entry.Value != nil {
+				currentConfigs[entry.Key] = *entry.Value
+			}
+		}
+	}
+
+	// Find configs that need updating
+	var alters []kadm.AlterConfig
+	for key, desired := range topic.Config {
+		current, exists := currentConfigs[key]
+		if !exists || current != desired {
+			slog.Info("Updating topic config",
+				"topic", topic.Name,
+				"key", key,
+				"current", current,
+				"desired", desired,
+			)
+			alters = append(alters, kadm.AlterConfig{
+				Op:    kadm.SetConfig,
+				Name:  key,
+				Value: &desired,
+			})
+		}
+	}
+
+	if len(alters) == 0 {
+		slog.Debug("Topic config up to date", "topic", topic.Name)
+		return nil
+	}
+
+	resp, err := p.admin.Admin.AlterTopicConfigs(ctx, alters, topic.Name)
+	if err != nil {
+		return fmt.Errorf("altering topic configs: %w", err)
+	}
+	for _, r := range resp {
+		if r.Err != nil {
+			return fmt.Errorf("altering config for topic %q: %w", r.Name, r.Err)
+		}
+	}
+
+	return nil
+}
+
+func toStringPtrMap(m map[string]string) map[string]*string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]*string, len(m))
+	for k, v := range m {
+		v := v
+		out[k] = &v
+	}
+	return out
+}
