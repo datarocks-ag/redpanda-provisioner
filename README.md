@@ -1,5 +1,8 @@
 # redpanda-provisioner
 
+[![CI](https://github.com/datarocks-ag/redpanda-provisioner/actions/workflows/ci.yaml/badge.svg)](https://github.com/datarocks-ag/redpanda-provisioner/actions/workflows/ci.yaml)
+![coverage](https://raw.githubusercontent.com/datarocks-ag/redpanda-provisioner/badges/.badges/develop/coverage.svg)
+
 A Go CLI tool that idempotently provisions Redpanda/Kafka resources from a YAML config file. Designed as a Docker Compose init container or Kubernetes Job.
 
 ## Features

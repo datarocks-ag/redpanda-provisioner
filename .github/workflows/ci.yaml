@@ -21,6 +21,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -29,7 +31,13 @@ jobs:
         with:
           go-version: "1.25"
       - name: Run unit tests
-        run: go test -race ./...
+        run: go test -race -coverprofile=cover.out ./...
+      - name: Check test coverage
+        uses: vladopajic/go-test-coverage@v2
+        with:
+          config: ./.testcoverage.yml
+          git-token: ${{ github.ref_name == 'develop' && secrets.GITHUB_TOKEN || '' }}
+          git-branch: badges
 
   test-integration:
     runs-on: ubuntu-latest
