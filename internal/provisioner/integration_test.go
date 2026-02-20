@@ -132,7 +132,7 @@ schemas:
 	ctx := context.Background()
 
 	// First run
-	p := provisioner.New(tc.admin, tc.schema, cfg)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg)
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("first provisioning run failed: %v", err)
 	}
@@ -204,13 +204,13 @@ topics:
 	ctx := context.Background()
 
 	// First run
-	p := provisioner.New(tc.admin, tc.schema, cfg)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg)
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
 	// Second run (idempotent)
-	p2 := provisioner.New(tc.admin, tc.schema, cfg)
+	p2 := provisioner.New(tc.admin.Admin, tc.schema, cfg)
 	if err := p2.Run(ctx); err != nil {
 		t.Fatalf("second (idempotent) run: %v", err)
 	}
@@ -248,7 +248,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p := provisioner.New(tc.admin, tc.schema, cfg1)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg1)
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("initial run: %v", err)
 	}
@@ -266,7 +266,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p2 := provisioner.New(tc.admin, tc.schema, cfg2)
+	p2 := provisioner.New(tc.admin.Admin, tc.schema, cfg2)
 	if err := p2.Run(ctx); err != nil {
 		t.Fatalf("partition increase run: %v", err)
 	}
@@ -301,7 +301,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p := provisioner.New(tc.admin, tc.schema, cfg1)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg1)
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("initial run: %v", err)
 	}
@@ -319,7 +319,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p2 := provisioner.New(tc.admin, tc.schema, cfg2)
+	p2 := provisioner.New(tc.admin.Admin, tc.schema, cfg2)
 	if err := p2.Run(ctx); err != nil {
 		t.Fatalf("decrease run should not fail: %v", err)
 	}
@@ -356,7 +356,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p := provisioner.New(tc.admin, tc.schema, cfg1)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg1)
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("initial run: %v", err)
 	}
@@ -376,7 +376,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p2 := provisioner.New(tc.admin, tc.schema, cfg2)
+	p2 := provisioner.New(tc.admin.Admin, tc.schema, cfg2)
 	if err := p2.Run(ctx); err != nil {
 		t.Fatalf("config update run: %v", err)
 	}
@@ -418,7 +418,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p := provisioner.New(tc.admin, tc.schema, cfg1)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg1)
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("initial run: %v", err)
 	}
@@ -439,7 +439,7 @@ topics:
 		t.Fatal(err)
 	}
 
-	p2 := provisioner.New(tc.admin, tc.schema, cfg2)
+	p2 := provisioner.New(tc.admin.Admin, tc.schema, cfg2)
 	if err := p2.Run(ctx); err != nil {
 		t.Fatalf("strategy=create run: %v", err)
 	}
@@ -491,7 +491,7 @@ schemas:
 	}
 
 	// First run
-	p := provisioner.New(tc.admin, tc.schema, cfg)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg)
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("schema registration failed: %v", err)
 	}
@@ -506,7 +506,7 @@ schemas:
 	}
 
 	// Second run (idempotent)
-	p2 := provisioner.New(tc.admin, tc.schema, cfg)
+	p2 := provisioner.New(tc.admin.Admin, tc.schema, cfg)
 	if err := p2.Run(ctx); err != nil {
 		t.Fatalf("idempotent schema run: %v", err)
 	}
@@ -522,7 +522,7 @@ func TestIntegrationEmptyConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := provisioner.New(tc.admin, tc.schema, cfg)
+	p := provisioner.New(tc.admin.Admin, tc.schema, cfg)
 	if err := p.Run(context.Background()); err != nil {
 		t.Fatalf("empty config should succeed: %v", err)
 	}
