@@ -1,0 +1,12 @@
+# Binary
+/redpanda-provisioner
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+
+# Test
+*.test
+coverage.out
