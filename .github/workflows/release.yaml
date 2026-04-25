@@ -135,7 +135,7 @@ jobs:
           CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o redpanda-provisioner ./cmd/redpanda-provisioner
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: redpanda-provisioner
           path: redpanda-provisioner
