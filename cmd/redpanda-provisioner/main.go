@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -31,19 +32,15 @@ func main() {
 	slog.Info("redpanda-provisioner finished successfully")
 }
 
-// Run executes a single provisioning pass using configuration sourced from
-// environment variables and the YAML file at REDPANDA_CONFIG_PATH. It is
-// extracted from main so that integration tests can drive the same code path
-// as the binary without spawning a subprocess.
+// Run executes a single provisioning pass. Connection details are sourced
+// from the YAML file at REDPANDA_CONFIG_PATH; legacy environment variables
+// (REDPANDA_BROKERS, REDPANDA_SASL_*, REDPANDA_TLS_ENABLED, SCHEMA_REGISTRY_*)
+// fill in any field the YAML leaves empty, so existing env-only deployments
+// keep working without changes.
+//
+// Run is exported so integration tests can drive the same code path as the
+// binary without spawning a subprocess.
 func Run(ctx context.Context) error {
-	brokers := envOrDefault("REDPANDA_BROKERS", "localhost:9092")
-	saslUsername := os.Getenv("REDPANDA_SASL_USERNAME")
-	saslPassword := os.Getenv("REDPANDA_SASL_PASSWORD")
-	saslMechanism := envOrDefault("REDPANDA_SASL_MECHANISM", "SCRAM-SHA-256")
-	tlsEnabled := envOrDefault("REDPANDA_TLS_ENABLED", "false")
-	schemaRegistryURL := os.Getenv("SCHEMA_REGISTRY_URL")
-	schemaRegistryUsername := os.Getenv("SCHEMA_REGISTRY_USERNAME")
-	schemaRegistryPassword := os.Getenv("SCHEMA_REGISTRY_PASSWORD")
 	configPath := envOrDefault("REDPANDA_CONFIG_PATH", "./config.yaml")
 
 	slog.Info("Loading configuration", "path", configPath)
@@ -58,10 +55,34 @@ func Run(ctx context.Context) error {
 		"acls", len(cfg.ACLs),
 	)
 
-	brokerAddrs := strings.Split(brokers, ",")
+	brokerAddrs := resolveBrokerAddresses(cfg.Broker.Addresses)
+	saslUsername := stringWithEnvFallback(cfg.Broker.SASL.Username, "REDPANDA_SASL_USERNAME")
+	saslPassword := stringWithEnvFallback(cfg.Broker.SASL.Password, "REDPANDA_SASL_PASSWORD")
+	saslMechanism := stringWithEnvFallback(cfg.Broker.SASL.Mechanism, "REDPANDA_SASL_MECHANISM")
+	if saslMechanism == "" {
+		saslMechanism = "SCRAM-SHA-256"
+	}
+
+	// Re-check broker SASL pairing and mechanism AFTER YAML/env merging.
+	// Config-load only sees the YAML side, so an env-only deployment with
+	// half-set credentials would otherwise reach client.connect — which
+	// silently disables SASL when either field is empty (auth downgrade
+	// masquerading as a broker error).
+	if err := validateMergedBrokerSASL(saslUsername, saslPassword, saslMechanism); err != nil {
+		return err
+	}
+
+	tlsEnabled, err := resolveTLSEnabled(cfg.Broker.TLS.Enabled)
+	if err != nil {
+		return err
+	}
+
+	schemaRegistryURL := stringWithEnvFallback(cfg.SchemaRegistry.URL, "SCHEMA_REGISTRY_URL")
+	schemaRegistryUsername := stringWithEnvFallback(cfg.SchemaRegistry.Username, "SCHEMA_REGISTRY_USERNAME")
+	schemaRegistryPassword := stringWithEnvFallback(cfg.SchemaRegistry.Password, "SCHEMA_REGISTRY_PASSWORD")
 
 	slog.Info("Connecting to Redpanda", "brokers", brokerAddrs)
-	adminClient, err := client.Connect(ctx, brokerAddrs, saslUsername, saslPassword, saslMechanism, tlsEnabled == "true")
+	adminClient, err := client.Connect(ctx, brokerAddrs, saslUsername, saslPassword, saslMechanism, tlsEnabled)
 	if err != nil {
 		return fmt.Errorf("connecting to Redpanda: %w", err)
 	}
@@ -74,7 +95,7 @@ func Run(ctx context.Context) error {
 	var schemaClient *client.SchemaRegistryClient
 	if len(cfg.Schemas) > 0 {
 		if schemaRegistryURL == "" {
-			return fmt.Errorf("schema registry URL required when schemas are configured (set SCHEMA_REGISTRY_URL)")
+			return fmt.Errorf("schema registry URL required when schemas are configured (set schema_registry.url or SCHEMA_REGISTRY_URL)")
 		}
 		slog.Info("Connecting to Schema Registry", "url", schemaRegistryURL, "auth", schemaRegistryUsername != "")
 		schemaClient, err = client.ConnectSchemaRegistry(ctx, schemaRegistryURL, schemaRegistryUsername, schemaRegistryPassword)
@@ -91,6 +112,73 @@ func Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// resolveBrokerAddresses prefers YAML config; if empty it falls back to
+// REDPANDA_BROKERS (comma-separated), and finally to "localhost:9092".
+// Each entry is trimmed so values like "redpanda:9092, broker2:9092" don't
+// produce a leading-space hostname.
+func resolveBrokerAddresses(yaml []string) []string {
+	if len(yaml) > 0 {
+		return trimAll(yaml)
+	}
+	if env := os.Getenv("REDPANDA_BROKERS"); env != "" {
+		return trimAll(strings.Split(env, ","))
+	}
+	return []string{"localhost:9092"}
+}
+
+func trimAll(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if t := strings.TrimSpace(s); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// validateMergedBrokerSASL applies the YAML-side pairing + mechanism rules
+// to the post-merge values seen by client.Connect. The mechanism allowlist
+// here mirrors validSASLMechanism in the config package; if you add a new
+// SCRAM variant, update both.
+func validateMergedBrokerSASL(username, password, mechanism string) error {
+	if (username == "") != (password == "") {
+		return fmt.Errorf("broker SASL username and password must both be set or both be empty (set broker.sasl.{username,password} or REDPANDA_SASL_{USERNAME,PASSWORD})")
+	}
+	if username != "" && mechanism != "SCRAM-SHA-256" && mechanism != "SCRAM-SHA-512" {
+		return fmt.Errorf("unsupported broker SASL mechanism %q (must be SCRAM-SHA-256 or SCRAM-SHA-512)", mechanism)
+	}
+	return nil
+}
+
+// stringWithEnvFallback returns yaml if non-empty, else the named env var.
+func stringWithEnvFallback(yaml, envKey string) string {
+	if yaml != "" {
+		return yaml
+	}
+	return os.Getenv(envKey)
+}
+
+// resolveTLSEnabled honors the documented YAML-wins-when-set rule. A YAML
+// value (true OR explicit false) overrides any env var; only when YAML is
+// absent (nil pointer) is REDPANDA_TLS_ENABLED consulted. The env var
+// accepts any value strconv.ParseBool understands (1, t, T, true, TRUE,
+// ...). An invalid env value is a config error rather than a silent
+// default-to-false.
+func resolveTLSEnabled(yamlValue *bool) (bool, error) {
+	if yamlValue != nil {
+		return *yamlValue, nil
+	}
+	raw := os.Getenv("REDPANDA_TLS_ENABLED")
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("REDPANDA_TLS_ENABLED: invalid bool %q: %w", raw, err)
+	}
+	return v, nil
 }
 
 func setupLogging() {

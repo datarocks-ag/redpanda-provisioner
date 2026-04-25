@@ -3,6 +3,26 @@
 # Set globally or per topic (topic strategy overrides global).
 # strategy: "update"
 
+# Connection details. All sub-fields are optional in YAML — when empty, the
+# legacy environment variables fill in (REDPANDA_BROKERS, REDPANDA_SASL_*,
+# REDPANDA_TLS_ENABLED, SCHEMA_REGISTRY_*). Use ${VAR} or ${VAR:-default}
+# inside any string to inject env values explicitly.
+#
+# broker:
+#   addresses:
+#     - redpanda:9092
+#   sasl:
+#     mechanism: SCRAM-SHA-256          # or SCRAM-SHA-512
+#     username: ${REDPANDA_ADMIN_USERNAME}
+#     password: ${REDPANDA_ADMIN_PASSWORD}
+#   tls:
+#     enabled: false
+#
+# schema_registry:
+#   url: http://redpanda:8081
+#   username: ${SR_USERNAME:-}
+#   password: ${SR_PASSWORD:-}
+
 topics:
   - name: orders
     partitions: 6

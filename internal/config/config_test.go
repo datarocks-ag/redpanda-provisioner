@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,7 +105,12 @@ users:
 	}
 }
 
-func TestLoadUnresolvedEnvVar(t *testing.T) {
+// TestLoadUnresolvedEnvVarFails pins the fail-closed behavior introduced in
+// M6: an unresolved ${VAR} in a config field is a load error instead of
+// being kept as a literal string. The literal-string fallback was a footgun
+// — an unset password would silently become the literal "${PASSWORD}" and
+// the broker would reject it with an unrelated UNACCEPTABLE_CREDENTIAL error.
+func TestLoadUnresolvedEnvVarFails(t *testing.T) {
 	os.Unsetenv("NONEXISTENT_VAR")
 
 	yaml := `
@@ -115,13 +121,113 @@ users:
 `
 	path := writeTempConfig(t, yaml)
 
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unresolved env var, got nil")
+	}
+	if !strings.Contains(err.Error(), "NONEXISTENT_VAR") {
+		t.Errorf("expected error to name the missing var, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "users[0].password") {
+		t.Errorf("expected error to point at the offending field, got: %v", err)
+	}
+}
+
+func TestLoadEnvVarDefault(t *testing.T) {
+	os.Unsetenv("MAYBE_UNSET")
+
+	yaml := `
+topics:
+  - name: ${MAYBE_UNSET:-fallback-topic}
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+
 	cfg, err := Load(path)
 	if err != nil {
-		t.Fatalf("Load() error: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
+	if cfg.Topics[0].Name != "fallback-topic" {
+		t.Errorf("expected default 'fallback-topic', got %q", cfg.Topics[0].Name)
+	}
+}
 
-	if cfg.Users[0].Password != "${NONEXISTENT_VAR}" {
-		t.Errorf("expected unresolved env var to be kept as-is, got %q", cfg.Users[0].Password)
+func TestLoadEnvVarDefaultOverriddenWhenSet(t *testing.T) {
+	t.Setenv("THIS_IS_SET", "actual-value")
+
+	yaml := `
+topics:
+  - name: ${THIS_IS_SET:-fallback}
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Topics[0].Name != "actual-value" {
+		t.Errorf("set env should win over default, got %q", cfg.Topics[0].Name)
+	}
+}
+
+func TestLoadEnvVarEmptyDefault(t *testing.T) {
+	os.Unsetenv("MISSING")
+
+	// ${VAR:-} is the explicit "may be empty" escape hatch.
+	yaml := `
+topics:
+  - name: prefix${MISSING:-}suffix
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Topics[0].Name != "prefixsuffix" {
+		t.Errorf("expected empty default to expand to '', got %q", cfg.Topics[0].Name)
+	}
+}
+
+func TestLoadEnvVarMultipleMissingReportedTogether(t *testing.T) {
+	os.Unsetenv("ONE")
+	os.Unsetenv("TWO")
+
+	yaml := `
+users:
+  - username: ${ONE}
+    password: ${TWO}
+    mechanism: SCRAM-SHA-256
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unresolved env vars")
+	}
+	if !strings.Contains(err.Error(), "ONE") || !strings.Contains(err.Error(), "TWO") {
+		t.Errorf("expected both missing vars in one error, got: %v", err)
+	}
+}
+
+// TestLoadEnvVarMalformedNotMatched verifies the tightened regex rejects
+// candidates that do not look like POSIX env var names: spaces, leading
+// digits, slashes. These are kept verbatim instead of being silently
+// expanded to nothing or matching unintended substrings.
+func TestLoadEnvVarMalformedNotMatched(t *testing.T) {
+	yaml := `
+topics:
+  - name: "literal-${not a var}-still-here"
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Topics[0].Name != "literal-${not a var}-still-here" {
+		t.Errorf("malformed reference should be left untouched, got %q", cfg.Topics[0].Name)
 	}
 }
 
@@ -725,6 +831,130 @@ schemas:
 	}
 	if cfg.Schemas[0].File != abs {
 		t.Errorf("absolute schema path mutated: got %q, want %q", cfg.Schemas[0].File, abs)
+	}
+}
+
+func TestLoadBrokerAndSchemaRegistryFromYAML(t *testing.T) {
+	t.Setenv("BROKER_PASSWORD", "from-env")
+	t.Setenv("SR_PASSWORD", "sr-from-env")
+
+	yaml := `
+broker:
+  addresses:
+    - redpanda-a:9092
+    - redpanda-b:9092
+  sasl:
+    mechanism: SCRAM-SHA-512
+    username: admin
+    password: ${BROKER_PASSWORD}
+  tls:
+    enabled: true
+schema_registry:
+  url: http://sr.internal:8081
+  username: sr-user
+  password: ${SR_PASSWORD}
+`
+	cfg, err := Load(writeTempConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got := cfg.Broker.Addresses; len(got) != 2 || got[0] != "redpanda-a:9092" || got[1] != "redpanda-b:9092" {
+		t.Errorf("broker.addresses: got %v", got)
+	}
+	if cfg.Broker.SASL.Mechanism != "SCRAM-SHA-512" {
+		t.Errorf("broker.sasl.mechanism: got %q", cfg.Broker.SASL.Mechanism)
+	}
+	if cfg.Broker.SASL.Username != "admin" {
+		t.Errorf("broker.sasl.username: got %q", cfg.Broker.SASL.Username)
+	}
+	if cfg.Broker.SASL.Password != "from-env" {
+		t.Errorf("broker.sasl.password (env-expanded): got %q", cfg.Broker.SASL.Password)
+	}
+	if cfg.Broker.TLS.Enabled == nil || !*cfg.Broker.TLS.Enabled {
+		t.Errorf("broker.tls.enabled: expected explicit true, got %v", cfg.Broker.TLS.Enabled)
+	}
+	if cfg.SchemaRegistry.URL != "http://sr.internal:8081" {
+		t.Errorf("schema_registry.url: got %q", cfg.SchemaRegistry.URL)
+	}
+	if cfg.SchemaRegistry.Password != "sr-from-env" {
+		t.Errorf("schema_registry.password (env-expanded): got %q", cfg.SchemaRegistry.Password)
+	}
+}
+
+func TestValidateBrokerInvalidMechanism(t *testing.T) {
+	yaml := `
+broker:
+  sasl:
+    mechanism: PLAIN
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for invalid broker SASL mechanism")
+	}
+}
+
+func TestValidateBrokerHalfSetCredentials(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"username-only", "broker:\n  sasl:\n    username: admin\n"},
+		{"password-only", "broker:\n  sasl:\n    password: secret\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tc.yaml))
+			if err == nil {
+				t.Fatal("expected error for half-set broker SASL credentials")
+			}
+			if !strings.Contains(err.Error(), "both be set or both be empty") {
+				t.Errorf("unexpected message: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateSchemaRegistryHalfSetCredentials(t *testing.T) {
+	yaml := `
+schema_registry:
+  url: http://sr:8081
+  username: only-user
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for half-set SR credentials")
+	}
+}
+
+func TestValidateBrokerEmptyAddressRejected(t *testing.T) {
+	yaml := `
+broker:
+  addresses:
+    - ""
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for empty broker address")
+	}
+}
+
+// TestValidateBrokerWhitespaceAddressRejected pins the fail-fast behavior
+// for whitespace-only addresses. Without this, "  " would survive
+// validation and then get silently dropped by trimAll() at runtime,
+// potentially leaving the broker list empty.
+func TestValidateBrokerWhitespaceAddressRejected(t *testing.T) {
+	yaml := `
+broker:
+  addresses:
+    - "   "
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for whitespace-only broker address")
+	}
+	if !strings.Contains(err.Error(), "whitespace-only") {
+		t.Errorf("expected error to mention whitespace, got: %v", err)
 	}
 }
 

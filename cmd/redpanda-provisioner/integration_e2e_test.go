@@ -327,3 +327,60 @@ topics:
 		t.Fatalf("Run took %s — it should have skipped the SR connect entirely", elapsed)
 	}
 }
+
+// TestE2EYAMLBrokerConfig verifies the new YAML connection block (M1).
+// All connection details — broker addresses, SASL, SR URL, SR basic auth —
+// come from the YAML file. None of the legacy REDPANDA_* / SCHEMA_REGISTRY_*
+// env vars are set, proving YAML alone is sufficient.
+func TestE2EYAMLBrokerConfig(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	fx := startProductionLikeRedpanda(t)
+	defer fx.cleanup()
+
+	dir := t.TempDir()
+	cfgPath := writeFixtureFile(t, dir, "config.yaml", fmt.Sprintf(`
+broker:
+  addresses:
+    - %s
+  sasl:
+    mechanism: SCRAM-SHA-256
+    username: %s
+    password: %s
+schema_registry:
+  url: %s
+  username: %s
+  password: %s
+topics:
+  - name: yaml-broker-topic
+    partitions: 1
+    replication_factor: 1
+`, fx.kafkaSeed, e2eAdminUser, e2eAdminPass, fx.srURL, e2eAdminUser, e2eAdminPass))
+
+	// Explicitly clear the legacy env vars so we know the YAML path is doing
+	// all the work. A regression that re-introduced env-only resolution
+	// would surface as a connection failure.
+	t.Setenv("REDPANDA_BROKERS", "")
+	t.Setenv("REDPANDA_SASL_USERNAME", "")
+	t.Setenv("REDPANDA_SASL_PASSWORD", "")
+	t.Setenv("REDPANDA_SASL_MECHANISM", "")
+	t.Setenv("SCHEMA_REGISTRY_URL", "")
+	t.Setenv("SCHEMA_REGISTRY_USERNAME", "")
+	t.Setenv("SCHEMA_REGISTRY_PASSWORD", "")
+	t.Setenv("REDPANDA_CONFIG_PATH", cfgPath)
+
+	if err := Run(ctx); err != nil {
+		t.Fatalf("Run with YAML-only config failed: %v", err)
+	}
+
+	// Verify the topic actually landed.
+	admin := newSCRAMAdmin(t, fx.kafkaSeed, e2eAdminUser, e2eAdminPass)
+	topics, err := admin.ListTopics(ctx, "yaml-broker-topic")
+	if err != nil {
+		t.Fatalf("listing topics: %v", err)
+	}
+	if _, ok := topics["yaml-broker-topic"]; !ok {
+		t.Fatal("topic 'yaml-broker-topic' missing — YAML config did not drive provisioning")
+	}
+}

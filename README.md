@@ -26,7 +26,15 @@ docker compose up
 
 This starts Redpanda and runs the provisioner with the example config.
 
-## Environment Variables
+## Configuration
+
+Connection details can be set in YAML (`broker:` and `schema_registry:`
+blocks) or via environment variables. **YAML wins when set; env vars fill in
+the rest** — so existing env-only deployments keep working unchanged. You
+can also embed env references inside YAML strings using `${VAR}` or
+`${VAR:-default}`.
+
+### Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -34,12 +42,33 @@ This starts Redpanda and runs the provisioner with the example config.
 | `REDPANDA_SASL_USERNAME` | no | — | SASL username |
 | `REDPANDA_SASL_PASSWORD` | no | — | SASL password |
 | `REDPANDA_SASL_MECHANISM` | no | `SCRAM-SHA-256` | SCRAM-SHA-256 or SCRAM-SHA-512 |
-| `REDPANDA_TLS_ENABLED` | no | `false` | Enable TLS |
+| `REDPANDA_TLS_ENABLED` | no | `false` | Enable TLS (any value `strconv.ParseBool` understands) |
 | `SCHEMA_REGISTRY_URL` | no | — | Schema Registry URL (required if schemas are configured) |
+| `SCHEMA_REGISTRY_USERNAME` | no | — | HTTP basic-auth user for SR |
+| `SCHEMA_REGISTRY_PASSWORD` | no | — | HTTP basic-auth password for SR |
 | `REDPANDA_CONFIG_PATH` | no | `./config.yaml` | Path to YAML config |
 | `LOG_LEVEL` | no | `info` | Log level (debug/info/warn/error) |
 
 All auth variables are optional (dev environments often have no auth).
+
+### YAML connection block
+
+```yaml
+broker:
+  addresses:
+    - redpanda:9092
+  sasl:
+    mechanism: SCRAM-SHA-256
+    username: ${REDPANDA_ADMIN_USERNAME}
+    password: ${REDPANDA_ADMIN_PASSWORD}
+  tls:
+    enabled: false
+
+schema_registry:
+  url: http://redpanda:8081
+  username: ${SR_USERNAME:-}
+  password: ${SR_PASSWORD:-}
+```
 
 ## Strategy
 
@@ -64,10 +93,27 @@ topics:
 
 ## Environment Variable Expansion
 
-String values support `${VAR}` syntax. If the variable is set in the environment, it is replaced; if unset, the placeholder is preserved as-is.
+String values support `${VAR}` and `${VAR:-default}` syntax. The variable
+name must match `[A-Za-z_][A-Za-z0-9_]*` (POSIX env var rules).
+
+- `${VAR}` — replaced with the env var value. If the env var is **unset and
+  no default is provided**, config-load fails with an error pointing at the
+  offending field. This is a deliberate fail-closed design: silently leaving
+  the literal `"${PASSWORD}"` in a credential field used to mask itself as
+  an unrelated broker error.
+- `${VAR:-fallback}` — replaced with the env var if set, otherwise the
+  literal `fallback`.
+- `${VAR:-}` — explicit "may be empty" escape hatch.
 
 ```yaml
-password: ${ORDERS_SERVICE_PASSWORD}    # replaced with env var value at load time
+users:
+  - username: orders-service
+    password: ${ORDERS_SERVICE_PASSWORD}    # required: load fails if unset
+
+schema_registry:
+  password: ${SR_PASSWORD:-}                # optional: empty if unset
+
+strategy: ${STRATEGY:-update}               # default: update
 ```
 
 ## Provisioning Order
