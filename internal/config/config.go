@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -69,6 +70,12 @@ type User struct {
 // SCRAM-SHA-* credentials. Values below this are rejected by the broker
 // with UNACCEPTABLE_CREDENTIAL.
 const MinSCRAMIterations = 4096
+
+// MaxSCRAMIterations is the wire-level ceiling for the iteration count.
+// The Kafka AlterUserScramCredentials API encodes this field as int32, so
+// any larger value would silently overflow on the wire. The broker may
+// also impose a stricter cap of its own; this is just the protocol limit.
+const MaxSCRAMIterations = math.MaxInt32
 
 // ACL defines a Kafka ACL entry to provision.
 type ACL struct {
@@ -339,6 +346,9 @@ func validateUsers(users []User) error {
 
 		if u.Iterations != 0 && u.Iterations < MinSCRAMIterations {
 			return fmt.Errorf("%s.iterations: must be >= %d (RFC 5802 minimum), got %d", prefix, MinSCRAMIterations, u.Iterations)
+		}
+		if u.Iterations > MaxSCRAMIterations {
+			return fmt.Errorf("%s.iterations: must be <= %d (Kafka API int32 limit), got %d", prefix, MaxSCRAMIterations, u.Iterations)
 		}
 	}
 

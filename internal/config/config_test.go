@@ -431,6 +431,23 @@ users:
 	}
 }
 
+func TestValidateUserIterationsAboveInt32Rejected(t *testing.T) {
+	// 2^31 = 2147483648, one past math.MaxInt32 (2147483647). Without the
+	// upper bound this would silently overflow when cast to int32.
+	yaml := `
+users:
+  - username: svc
+    password: pass
+    mechanism: SCRAM-SHA-256
+    iterations: 2147483648
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for iterations > MaxInt32")
+	}
+}
+
 func TestValidateUserIterationsAtMinimumAccepted(t *testing.T) {
 	yaml := `
 users:

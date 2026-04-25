@@ -94,14 +94,20 @@ func writeFixtureFile(t *testing.T, dir, name, content string) string {
 	return p
 }
 
-func srGet(t *testing.T, url, user, pass string) *http.Response {
+// srHTTPClient is reused across all in-test SR probes so we never inherit
+// the unbounded timeout of http.DefaultClient.
+var srHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+func srGet(ctx context.Context, t *testing.T, url, user, pass string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatalf("building SR request: %v", err)
 	}
-	req.SetBasicAuth(user, pass)
-	resp, err := http.DefaultClient.Do(req)
+	if user != "" {
+		req.SetBasicAuth(user, pass)
+	}
+	resp, err := srHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("SR request: %v", err)
 	}
@@ -198,7 +204,7 @@ acls:
 
 	// TC3 — schema registration went through the authenticated SR endpoint.
 	// Without the B2 fix the registration would have 403'd at startup.
-	resp := srGet(t, fx.srURL+"/subjects/orders-value/versions/latest", e2eAdminUser, e2eAdminPass)
+	resp := srGet(ctx, t, fx.srURL+"/subjects/orders-value/versions/latest", e2eAdminUser, e2eAdminPass)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -218,10 +224,7 @@ acls:
 
 	// TC3b — without basic auth the same request is rejected, proving the
 	// listener is actually enforcing http_basic (not silently allowing all).
-	noAuth, err := http.Get(fx.srURL + "/subjects/orders-value/versions/latest")
-	if err != nil {
-		t.Fatalf("unauthenticated SR request: %v", err)
-	}
+	noAuth := srGet(ctx, t, fx.srURL+"/subjects/orders-value/versions/latest", "", "")
 	noAuth.Body.Close()
 	if noAuth.StatusCode != http.StatusUnauthorized && noAuth.StatusCode != http.StatusForbidden {
 		t.Errorf("expected 401/403 from unauthenticated SR request, got %d", noAuth.StatusCode)
@@ -271,7 +274,7 @@ acls:
 
 	// And the schema subject still has exactly one version (no duplicate
 	// registration on the second pass).
-	versionsResp := srGet(t, fx.srURL+"/subjects/orders-value/versions", e2eAdminUser, e2eAdminPass)
+	versionsResp := srGet(ctx, t, fx.srURL+"/subjects/orders-value/versions", e2eAdminUser, e2eAdminPass)
 	defer versionsResp.Body.Close()
 	if versionsResp.StatusCode != http.StatusOK {
 		t.Fatalf("listing schema versions: status %d", versionsResp.StatusCode)
