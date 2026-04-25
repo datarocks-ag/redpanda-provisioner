@@ -12,6 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	rpmodule "github.com/testcontainers/testcontainers-go/modules/redpanda"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 
 	"redpanda-provisioner/internal/client"
 	"redpanda-provisioner/internal/config"
@@ -28,7 +29,7 @@ func setupRedpanda(t *testing.T) testCluster {
 	t.Helper()
 	ctx := context.Background()
 
-	rpContainer, err := rpmodule.Run(ctx, "redpandadata/redpanda:v24.3.1")
+	rpContainer, err := rpmodule.Run(ctx, "redpandadata/redpanda:v26.1.6")
 	if err != nil {
 		t.Fatalf("failed to start redpanda container: %v", err)
 	}
@@ -50,7 +51,67 @@ func setupRedpanda(t *testing.T) testCluster {
 
 	adminClient := client.NewAdminClient(kClient)
 
-	schemaClient, err := client.ConnectSchemaRegistry(ctx, srAddr)
+	schemaClient, err := client.ConnectSchemaRegistry(ctx, srAddr, "", "")
+	if err != nil {
+		kClient.Close()
+		t.Fatalf("failed to connect to schema registry: %v", err)
+	}
+
+	cleanup := func() {
+		adminClient.Close()
+		if err := testcontainers.TerminateContainer(rpContainer); err != nil {
+			log.Printf("failed to terminate container: %v", err)
+		}
+	}
+
+	return testCluster{admin: adminClient, schema: schemaClient, cleanup: cleanup}
+}
+
+// setupRedpandaWithSASL launches a Redpanda container with SCRAM-SHA-256
+// enabled and a pre-seeded admin superuser. This is required for
+// AlterUserScramCredentials over the Kafka protocol — Redpanda only
+// advertises that API when SASL is enabled and the caller is a superuser.
+// Uses Redpanda v26.x because earlier versions did not expose the API on
+// the Kafka listener (broker advertised no support, franz-go aborted with
+// "broker is too old").
+func setupRedpandaWithSASL(t *testing.T) testCluster {
+	t.Helper()
+	ctx := context.Background()
+
+	const adminUser, adminPass = "admin", "admin-secret"
+
+	rpContainer, err := rpmodule.Run(ctx, "redpandadata/redpanda:v26.1.6",
+		rpmodule.WithEnableSASL(),
+		rpmodule.WithEnableKafkaAuthorization(),
+		rpmodule.WithNewServiceAccount(adminUser, adminPass),
+		rpmodule.WithSuperusers(adminUser),
+	)
+	if err != nil {
+		t.Fatalf("failed to start redpanda container: %v", err)
+	}
+
+	broker, err := rpContainer.KafkaSeedBroker(ctx)
+	if err != nil {
+		t.Fatalf("failed to get kafka broker address: %v", err)
+	}
+
+	srAddr, err := rpContainer.SchemaRegistryAddress(ctx)
+	if err != nil {
+		t.Fatalf("failed to get schema registry address: %v", err)
+	}
+
+	auth := scram.Auth{User: adminUser, Pass: adminPass}
+	kClient, err := kgo.NewClient(
+		kgo.SeedBrokers(broker),
+		kgo.SASL(auth.AsSha256Mechanism()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create kafka client: %v", err)
+	}
+
+	adminClient := client.NewAdminClient(kClient)
+
+	schemaClient, err := client.ConnectSchemaRegistry(ctx, srAddr, "", "")
 	if err != nil {
 		kClient.Close()
 		t.Fatalf("failed to connect to schema registry: %v", err)
@@ -509,6 +570,85 @@ schemas:
 	p2 := provisioner.New(tc.admin, tc.schema, cfg)
 	if err := p2.Run(ctx); err != nil {
 		t.Fatalf("idempotent schema run: %v", err)
+	}
+}
+
+func TestIntegrationUserProvisioning(t *testing.T) {
+	tc := setupRedpandaWithSASL(t)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+
+	cfgYAML := `
+users:
+  - username: integration-user
+    password: integration-password
+    mechanism: SCRAM-SHA-256
+`
+	cfgPath := writeTestConfig(t, cfgYAML)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	p := provisioner.New(tc.admin, tc.schema, cfg)
+	if err := p.Run(ctx); err != nil {
+		t.Fatalf("user provisioning failed (regression of UNACCEPTABLE_CREDENTIAL bug): %v", err)
+	}
+
+	// Verify the broker actually accepted the credential by describing it.
+	described, err := tc.admin.DescribeUserSCRAMs(ctx, "integration-user")
+	if err != nil {
+		t.Fatalf("describing SCRAM users: %v", err)
+	}
+	user, ok := described["integration-user"]
+	if !ok {
+		t.Fatal("user 'integration-user' not present in broker SCRAM credentials")
+	}
+	if len(user.CredInfos) == 0 {
+		t.Fatal("user has no credentials")
+	}
+	if user.CredInfos[0].Iterations < int32(config.MinSCRAMIterations) {
+		t.Errorf("expected iterations >= %d, got %d", config.MinSCRAMIterations, user.CredInfos[0].Iterations)
+	}
+
+	// Second run is idempotent: re-upserts the same password without error.
+	if err := p.Run(ctx); err != nil {
+		t.Fatalf("second (idempotent) user run: %v", err)
+	}
+}
+
+func TestIntegrationUserProvisioningCustomIterations(t *testing.T) {
+	tc := setupRedpandaWithSASL(t)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+
+	cfgYAML := `
+users:
+  - username: hardened-user
+    password: hardened-password
+    mechanism: SCRAM-SHA-256
+    iterations: 8192
+`
+	cfgPath := writeTestConfig(t, cfgYAML)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+
+	p := provisioner.New(tc.admin, tc.schema, cfg)
+	if err := p.Run(ctx); err != nil {
+		t.Fatalf("user provisioning with custom iterations failed: %v", err)
+	}
+
+	described, err := tc.admin.DescribeUserSCRAMs(ctx, "hardened-user")
+	if err != nil {
+		t.Fatalf("describing SCRAM users: %v", err)
+	}
+	user := described["hardened-user"]
+	if len(user.CredInfos) == 0 || user.CredInfos[0].Iterations != 8192 {
+		t.Errorf("expected iterations 8192, got %v", user.CredInfos)
 	}
 }
 

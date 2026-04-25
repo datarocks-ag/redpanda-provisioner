@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -54,11 +55,27 @@ type Schema struct {
 }
 
 // User defines a SASL/SCRAM user to provision.
+//
+// Iterations is the SCRAM PBKDF2 iteration count and defaults to 4096
+// (the RFC 5802 minimum) when zero or unset. Raise it for FIPS-hardened
+// deployments; values below 4096 are rejected at config-load time.
 type User struct {
-	Username  string `yaml:"username"`
-	Password  string `yaml:"password"`
-	Mechanism string `yaml:"mechanism"`
+	Username   string `yaml:"username"`
+	Password   string `yaml:"password"`
+	Mechanism  string `yaml:"mechanism"`
+	Iterations int    `yaml:"iterations,omitempty"`
 }
+
+// MinSCRAMIterations is the RFC 5802 minimum PBKDF2 iteration count for
+// SCRAM-SHA-* credentials. Values below this are rejected by the broker
+// with UNACCEPTABLE_CREDENTIAL.
+const MinSCRAMIterations = 4096
+
+// MaxSCRAMIterations is the wire-level ceiling for the iteration count.
+// The Kafka AlterUserScramCredentials API encodes this field as int32, so
+// any larger value would silently overflow on the wire. The broker may
+// also impose a stricter cap of its own; this is just the protocol limit.
+const MaxSCRAMIterations = math.MaxInt32
 
 // ACL defines a Kafka ACL entry to provision.
 type ACL struct {
@@ -173,23 +190,23 @@ var validSASLMechanism = map[string]bool{
 }
 
 var validResourceTypes = map[string]bool{
-	"topic":           true,
-	"group":           true,
-	"cluster":         true,
+	"topic":            true,
+	"group":            true,
+	"cluster":          true,
 	"transactional_id": true,
 }
 
 var validOperations = map[string]bool{
-	"all":             true,
-	"read":            true,
-	"write":           true,
-	"create":          true,
-	"delete":          true,
-	"alter":           true,
-	"describe":        true,
-	"cluster_action":  true,
+	"all":              true,
+	"read":             true,
+	"write":            true,
+	"create":           true,
+	"delete":           true,
+	"alter":            true,
+	"describe":         true,
+	"cluster_action":   true,
 	"describe_configs": true,
-	"alter_configs":   true,
+	"alter_configs":    true,
 	"idempotent_write": true,
 }
 
@@ -325,6 +342,13 @@ func validateUsers(users []User) error {
 		}
 		if !validSASLMechanism[u.Mechanism] {
 			return fmt.Errorf("%s.mechanism: invalid value %q (must be SCRAM-SHA-256 or SCRAM-SHA-512)", prefix, u.Mechanism)
+		}
+
+		if u.Iterations != 0 && u.Iterations < MinSCRAMIterations {
+			return fmt.Errorf("%s.iterations: must be >= %d (RFC 5802 minimum), got %d", prefix, MinSCRAMIterations, u.Iterations)
+		}
+		if u.Iterations > MaxSCRAMIterations {
+			return fmt.Errorf("%s.iterations: must be <= %d (Kafka API int32 limit), got %d", prefix, MaxSCRAMIterations, u.Iterations)
 		}
 	}
 

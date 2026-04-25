@@ -21,14 +21,20 @@ func (p *Provisioner) ensureUser(ctx context.Context, user config.User) error {
 		return fmt.Errorf("unsupported SASL mechanism %q", user.Mechanism)
 	}
 
+	iterations := user.Iterations
+	if iterations == 0 {
+		iterations = config.MinSCRAMIterations
+	}
+
 	// AlterUserSCRAMs is idempotent — it creates or updates the user.
 	// We always upsert to ensure the password is current.
-	slog.Info("Ensuring SCRAM user", "username", user.Username, "mechanism", user.Mechanism)
+	slog.Info("Ensuring SCRAM user", "username", user.Username, "mechanism", user.Mechanism, "iterations", iterations)
 
 	upsert := kadm.UpsertSCRAM{
-		User:      user.Username,
-		Mechanism: scramMechanism,
-		Password:  user.Password,
+		User:       user.Username,
+		Mechanism:  scramMechanism,
+		Iterations: int32(iterations),
+		Password:   user.Password,
 	}
 
 	resp, err := p.admin.AlterUserSCRAMs(ctx, []kadm.DeleteSCRAM{}, []kadm.UpsertSCRAM{upsert})

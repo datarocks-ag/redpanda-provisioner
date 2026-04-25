@@ -126,17 +126,32 @@ func connect(brokers []string, username, password, mechanism string, tlsEnabled 
 }
 
 // SchemaRegistryClient is a simple HTTP client for the Confluent Schema Registry API.
+//
+// HTTP basic auth credentials, when provided, are applied via
+// [http.Request.SetBasicAuth] on every request. Embedding credentials in the
+// URL is not supported — Go's net/http strips url.User before sending.
 type SchemaRegistryClient struct {
 	baseURL    string
 	httpClient *http.Client
+	username   string
+	password   string
 }
 
-// ConnectSchemaRegistry establishes a connection to the Schema Registry with retry.
-func ConnectSchemaRegistry(ctx context.Context, baseURL string) (*SchemaRegistryClient, error) {
+// ConnectSchemaRegistry establishes a connection to the Schema Registry with
+// retry. Pass empty username/password for unauthenticated registries; partial
+// credentials (one set, the other empty) are rejected here so misconfiguration
+// fails fast at the API boundary instead of producing a confusing 401 on the
+// first authenticated request.
+func ConnectSchemaRegistry(ctx context.Context, baseURL, username, password string) (*SchemaRegistryClient, error) {
+	if (username == "") != (password == "") {
+		return nil, fmt.Errorf("schema registry username and password must both be set or both be empty")
+	}
 	baseURL = strings.TrimRight(baseURL, "/")
 	client := &SchemaRegistryClient{
 		baseURL:    baseURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		username:   username,
+		password:   password,
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
@@ -175,11 +190,19 @@ func ConnectSchemaRegistry(ctx context.Context, baseURL string) (*SchemaRegistry
 	return nil, fmt.Errorf("failed to connect to schema registry after %d retries", maxRetries+1)
 }
 
+// authorize attaches HTTP basic auth to req when credentials are configured.
+func (c *SchemaRegistryClient) authorize(req *http.Request) {
+	if c.username != "" {
+		req.SetBasicAuth(c.username, c.password)
+	}
+}
+
 func (c *SchemaRegistryClient) ping(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/subjects", nil)
 	if err != nil {
 		return fmt.Errorf("creating ping request: %w", err)
 	}
+	c.authorize(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -248,6 +271,7 @@ func (c *SchemaRegistryClient) GetCompatibility(ctx context.Context, subject str
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json")
+	c.authorize(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -283,6 +307,7 @@ func (c *SchemaRegistryClient) doJSON(ctx context.Context, method, path string, 
 	}
 	req.Header.Set("Content-Type", "application/vnd.schemaregistry.v1+json")
 	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json")
+	c.authorize(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
