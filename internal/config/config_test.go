@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,7 +105,12 @@ users:
 	}
 }
 
-func TestLoadUnresolvedEnvVar(t *testing.T) {
+// TestLoadUnresolvedEnvVarFails pins the fail-closed behavior introduced in
+// M6: an unresolved ${VAR} in a config field is a load error instead of
+// being kept as a literal string. The literal-string fallback was a footgun
+// — an unset password would silently become the literal "${PASSWORD}" and
+// the broker would reject it with an unrelated UNACCEPTABLE_CREDENTIAL error.
+func TestLoadUnresolvedEnvVarFails(t *testing.T) {
 	os.Unsetenv("NONEXISTENT_VAR")
 
 	yaml := `
@@ -115,13 +121,113 @@ users:
 `
 	path := writeTempConfig(t, yaml)
 
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unresolved env var, got nil")
+	}
+	if !strings.Contains(err.Error(), "NONEXISTENT_VAR") {
+		t.Errorf("expected error to name the missing var, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "users[0].password") {
+		t.Errorf("expected error to point at the offending field, got: %v", err)
+	}
+}
+
+func TestLoadEnvVarDefault(t *testing.T) {
+	os.Unsetenv("MAYBE_UNSET")
+
+	yaml := `
+topics:
+  - name: ${MAYBE_UNSET:-fallback-topic}
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+
 	cfg, err := Load(path)
 	if err != nil {
-		t.Fatalf("Load() error: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
+	if cfg.Topics[0].Name != "fallback-topic" {
+		t.Errorf("expected default 'fallback-topic', got %q", cfg.Topics[0].Name)
+	}
+}
 
-	if cfg.Users[0].Password != "${NONEXISTENT_VAR}" {
-		t.Errorf("expected unresolved env var to be kept as-is, got %q", cfg.Users[0].Password)
+func TestLoadEnvVarDefaultOverriddenWhenSet(t *testing.T) {
+	t.Setenv("THIS_IS_SET", "actual-value")
+
+	yaml := `
+topics:
+  - name: ${THIS_IS_SET:-fallback}
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Topics[0].Name != "actual-value" {
+		t.Errorf("set env should win over default, got %q", cfg.Topics[0].Name)
+	}
+}
+
+func TestLoadEnvVarEmptyDefault(t *testing.T) {
+	os.Unsetenv("MISSING")
+
+	// ${VAR:-} is the explicit "may be empty" escape hatch.
+	yaml := `
+topics:
+  - name: prefix${MISSING:-}suffix
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Topics[0].Name != "prefixsuffix" {
+		t.Errorf("expected empty default to expand to '', got %q", cfg.Topics[0].Name)
+	}
+}
+
+func TestLoadEnvVarMultipleMissingReportedTogether(t *testing.T) {
+	os.Unsetenv("ONE")
+	os.Unsetenv("TWO")
+
+	yaml := `
+users:
+  - username: ${ONE}
+    password: ${TWO}
+    mechanism: SCRAM-SHA-256
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unresolved env vars")
+	}
+	if !strings.Contains(err.Error(), "ONE") || !strings.Contains(err.Error(), "TWO") {
+		t.Errorf("expected both missing vars in one error, got: %v", err)
+	}
+}
+
+// TestLoadEnvVarMalformedNotMatched verifies the tightened regex rejects
+// candidates that do not look like POSIX env var names: spaces, leading
+// digits, slashes. These are kept verbatim instead of being silently
+// expanded to nothing or matching unintended substrings.
+func TestLoadEnvVarMalformedNotMatched(t *testing.T) {
+	yaml := `
+topics:
+  - name: "literal-${not a var}-still-here"
+    partitions: 1
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Topics[0].Name != "literal-${not a var}-still-here" {
+		t.Errorf("malformed reference should be left untouched, got %q", cfg.Topics[0].Name)
 	}
 }
 

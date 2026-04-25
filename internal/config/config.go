@@ -93,58 +93,115 @@ func containsNullByte(s string) bool {
 	return strings.ContainsRune(s, '\x00')
 }
 
-var envVarPattern = regexp.MustCompile(`\$\{([^}]+)}`)
+// envVarPattern matches ${NAME} or ${NAME:-default}. NAME is restricted to
+// POSIX environment variable identifiers ([A-Za-z_][A-Za-z0-9_]*), which
+// rejects accidental matches like ${ a typo} or ${PATH/sub}. The optional
+// ":-default" tail captures the literal default after the dash; the default
+// itself may not contain '}', matching shell-style behavior closely enough
+// for declarative configs.
+var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
 
-// expandEnvVars replaces ${VAR} references with their environment variable values.
-func expandEnvVars(s string) string {
-	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
-		varName := envVarPattern.FindStringSubmatch(match)[1]
-		if val, ok := os.LookupEnv(varName); ok {
+// expandEnvVars replaces ${VAR} and ${VAR:-default} references with their
+// environment variable values. It returns a list of unresolved variable
+// names — references with no env value and no default — so the caller can
+// fail config-load with a clear, location-aware error instead of letting
+// literal "${VAR}" leak into a broker call.
+func expandEnvVars(s string) (string, []string) {
+	var unresolved []string
+	expanded := envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		groups := envVarPattern.FindStringSubmatch(match)
+		name := groups[1]
+		hasDefault := strings.Contains(match, ":-")
+		def := groups[2]
+		if val, ok := os.LookupEnv(name); ok {
 			return val
 		}
+		if hasDefault {
+			return def
+		}
+		unresolved = append(unresolved, name)
 		return match
 	})
+	return expanded, unresolved
 }
 
-// expandConfig walks the config and expands env vars in string fields.
-func expandConfig(cfg *Config) {
-	cfg.Strategy = expandEnvVars(cfg.Strategy)
+// expansionErrors collects field paths whose env-var references could not be
+// resolved. It is exposed via the error returned by Load so the user sees
+// every missing variable in one go instead of fixing them one at a time.
+type expansionErrors struct {
+	missing []string // formatted as "field.path: ${VAR_NAME}"
+}
+
+func (e *expansionErrors) record(path string, names []string) {
+	for _, n := range names {
+		e.missing = append(e.missing, fmt.Sprintf("%s: ${%s}", path, n))
+	}
+}
+
+func (e *expansionErrors) err() error {
+	if len(e.missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("unresolved environment variables (set the env var or provide a default with ${VAR:-fallback}):\n  %s", strings.Join(e.missing, "\n  "))
+}
+
+// expandConfig walks the config and expands env vars in string fields,
+// returning an error if any reference cannot be resolved.
+func expandConfig(cfg *Config) error {
+	errs := &expansionErrors{}
+	expand := func(path string, s *string) {
+		v, missing := expandEnvVars(*s)
+		*s = v
+		errs.record(path, missing)
+	}
+
+	expand("strategy", &cfg.Strategy)
 
 	for i := range cfg.Topics {
 		t := &cfg.Topics[i]
-		t.Name = expandEnvVars(t.Name)
-		t.Strategy = expandEnvVars(t.Strategy)
+		prefix := fmt.Sprintf("topics[%d]", i)
+		expand(prefix+".name", &t.Name)
+		expand(prefix+".strategy", &t.Strategy)
 		for k, v := range t.Config {
-			t.Config[k] = expandEnvVars(v)
+			expanded, missing := expandEnvVars(v)
+			t.Config[k] = expanded
+			errs.record(fmt.Sprintf("%s.config.%s", prefix, k), missing)
 		}
 	}
 
 	for i := range cfg.Schemas {
 		s := &cfg.Schemas[i]
-		s.Subject = expandEnvVars(s.Subject)
-		s.Type = expandEnvVars(s.Type)
-		s.File = expandEnvVars(s.File)
-		s.Compatibility = expandEnvVars(s.Compatibility)
+		prefix := fmt.Sprintf("schemas[%d]", i)
+		expand(prefix+".subject", &s.Subject)
+		expand(prefix+".type", &s.Type)
+		expand(prefix+".file", &s.File)
+		expand(prefix+".compatibility", &s.Compatibility)
 	}
 
 	for i := range cfg.Users {
 		u := &cfg.Users[i]
-		u.Username = expandEnvVars(u.Username)
-		u.Password = expandEnvVars(u.Password)
-		u.Mechanism = expandEnvVars(u.Mechanism)
+		prefix := fmt.Sprintf("users[%d]", i)
+		expand(prefix+".username", &u.Username)
+		expand(prefix+".password", &u.Password)
+		expand(prefix+".mechanism", &u.Mechanism)
 	}
 
 	for i := range cfg.ACLs {
 		a := &cfg.ACLs[i]
-		a.Principal = expandEnvVars(a.Principal)
-		a.ResourceType = expandEnvVars(a.ResourceType)
-		a.ResourceName = expandEnvVars(a.ResourceName)
-		a.Pattern = expandEnvVars(a.Pattern)
-		a.Permission = expandEnvVars(a.Permission)
+		prefix := fmt.Sprintf("acls[%d]", i)
+		expand(prefix+".principal", &a.Principal)
+		expand(prefix+".resource_type", &a.ResourceType)
+		expand(prefix+".resource_name", &a.ResourceName)
+		expand(prefix+".pattern", &a.Pattern)
+		expand(prefix+".permission", &a.Permission)
 		for j := range a.Operations {
-			a.Operations[j] = expandEnvVars(a.Operations[j])
+			expanded, missing := expandEnvVars(a.Operations[j])
+			a.Operations[j] = expanded
+			errs.record(fmt.Sprintf("%s.operations[%d]", prefix, j), missing)
 		}
 	}
+
+	return errs.err()
 }
 
 // Load reads and parses a YAML config file, expanding env vars and validating.
@@ -164,7 +221,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
-	expandConfig(&cfg)
+	if err := expandConfig(&cfg); err != nil {
+		return nil, err
+	}
 
 	configDir, err := configDirFromPath(path)
 	if err != nil {

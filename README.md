@@ -64,10 +64,22 @@ topics:
 
 ## Environment Variable Expansion
 
-String values support `${VAR}` syntax. If the variable is set in the environment, it is replaced; if unset, the placeholder is preserved as-is.
+String values support `${VAR}` and `${VAR:-default}` syntax. The variable
+name must match `[A-Za-z_][A-Za-z0-9_]*` (POSIX env var rules).
+
+- `${VAR}` — replaced with the env var value. If the env var is **unset and
+  no default is provided**, config-load fails with an error pointing at the
+  offending field. This is a deliberate fail-closed design: silently leaving
+  the literal `"${PASSWORD}"` in a credential field used to mask itself as
+  an unrelated broker error.
+- `${VAR:-fallback}` — replaced with the env var if set, otherwise the
+  literal `fallback`.
+- `${VAR:-}` — explicit "may be empty" escape hatch.
 
 ```yaml
-password: ${ORDERS_SERVICE_PASSWORD}    # replaced with env var value at load time
+password: ${ORDERS_SERVICE_PASSWORD}              # required: must be set
+sr_password: ${SR_PASSWORD:-}                     # optional: empty if unset
+log_level: ${LOG_LEVEL:-info}                     # default: info
 ```
 
 ## Provisioning Order
