@@ -106,9 +106,14 @@ name must match `[A-Za-z_][A-Za-z0-9_]*` (POSIX env var rules).
 - `${VAR:-}` — explicit "may be empty" escape hatch.
 
 ```yaml
-password: ${ORDERS_SERVICE_PASSWORD}              # required: must be set
-sr_password: ${SR_PASSWORD:-}                     # optional: empty if unset
-log_level: ${LOG_LEVEL:-info}                     # default: info
+users:
+  - username: orders-service
+    password: ${ORDERS_SERVICE_PASSWORD}    # required: load fails if unset
+
+schema_registry:
+  password: ${SR_PASSWORD:-}                # optional: empty if unset
+
+strategy: ${STRATEGY:-update}               # default: update
 ```
 
 ## Provisioning Order

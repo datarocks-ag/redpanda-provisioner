@@ -59,11 +59,14 @@ type BrokerSASL struct {
 	Password  string `yaml:"password"`
 }
 
-// BrokerTLS toggles TLS for the Kafka client. The current implementation
-// only takes a boolean; richer TLS config (CA bundle, mTLS, ServerName) is
-// tracked separately in the review backlog (M2).
+// BrokerTLS toggles TLS for the Kafka client. Enabled is a *bool so we can
+// distinguish "explicitly false in YAML" from "unset", which matters for
+// the YAML-wins-when-set layering: a YAML `enabled: false` must override
+// REDPANDA_TLS_ENABLED=true rather than be indistinguishable from default.
+// Richer TLS config (CA bundle, mTLS, ServerName) is tracked in the review
+// backlog (M2).
 type BrokerTLS struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled *bool `yaml:"enabled"`
 }
 
 // SchemaRegistry describes how to reach the Schema Registry HTTP API.
@@ -397,8 +400,8 @@ func validate(cfg *Config) error {
 // allowed — main.go falls back to env vars.
 func validateBroker(b *Broker) error {
 	for i, addr := range b.Addresses {
-		if addr == "" {
-			return fmt.Errorf("broker.addresses[%d]: must not be empty", i)
+		if strings.TrimSpace(addr) == "" {
+			return fmt.Errorf("broker.addresses[%d]: must not be empty or whitespace-only", i)
 		}
 		if containsNullByte(addr) {
 			return fmt.Errorf("broker.addresses[%d]: contains null byte", i)

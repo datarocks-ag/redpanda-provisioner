@@ -871,8 +871,8 @@ schema_registry:
 	if cfg.Broker.SASL.Password != "from-env" {
 		t.Errorf("broker.sasl.password (env-expanded): got %q", cfg.Broker.SASL.Password)
 	}
-	if !cfg.Broker.TLS.Enabled {
-		t.Error("broker.tls.enabled: expected true")
+	if cfg.Broker.TLS.Enabled == nil || !*cfg.Broker.TLS.Enabled {
+		t.Errorf("broker.tls.enabled: expected explicit true, got %v", cfg.Broker.TLS.Enabled)
 	}
 	if cfg.SchemaRegistry.URL != "http://sr.internal:8081" {
 		t.Errorf("schema_registry.url: got %q", cfg.SchemaRegistry.URL)
@@ -936,6 +936,25 @@ broker:
 	_, err := Load(writeTempConfig(t, yaml))
 	if err == nil {
 		t.Fatal("expected error for empty broker address")
+	}
+}
+
+// TestValidateBrokerWhitespaceAddressRejected pins the fail-fast behavior
+// for whitespace-only addresses. Without this, "  " would survive
+// validation and then get silently dropped by trimAll() at runtime,
+// potentially leaving the broker list empty.
+func TestValidateBrokerWhitespaceAddressRejected(t *testing.T) {
+	yaml := `
+broker:
+  addresses:
+    - "   "
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for whitespace-only broker address")
+	}
+	if !strings.Contains(err.Error(), "whitespace-only") {
+		t.Errorf("expected error to mention whitespace, got: %v", err)
 	}
 }
 

@@ -62,6 +62,16 @@ func Run(ctx context.Context) error {
 	if saslMechanism == "" {
 		saslMechanism = "SCRAM-SHA-256"
 	}
+
+	// Re-check broker SASL pairing and mechanism AFTER YAML/env merging.
+	// Config-load only sees the YAML side, so an env-only deployment with
+	// half-set credentials would otherwise reach client.connect — which
+	// silently disables SASL when either field is empty (auth downgrade
+	// masquerading as a broker error).
+	if err := validateMergedBrokerSASL(saslUsername, saslPassword, saslMechanism); err != nil {
+		return err
+	}
+
 	tlsEnabled, err := resolveTLSEnabled(cfg.Broker.TLS.Enabled)
 	if err != nil {
 		return err
@@ -128,6 +138,20 @@ func trimAll(in []string) []string {
 	return out
 }
 
+// validateMergedBrokerSASL applies the YAML-side pairing + mechanism rules
+// to the post-merge values seen by client.Connect. The mechanism allowlist
+// here mirrors validSASLMechanism in the config package; if you add a new
+// SCRAM variant, update both.
+func validateMergedBrokerSASL(username, password, mechanism string) error {
+	if (username == "") != (password == "") {
+		return fmt.Errorf("broker SASL username and password must both be set or both be empty (set broker.sasl.{username,password} or REDPANDA_SASL_{USERNAME,PASSWORD})")
+	}
+	if username != "" && mechanism != "SCRAM-SHA-256" && mechanism != "SCRAM-SHA-512" {
+		return fmt.Errorf("unsupported broker SASL mechanism %q (must be SCRAM-SHA-256 or SCRAM-SHA-512)", mechanism)
+	}
+	return nil
+}
+
 // stringWithEnvFallback returns yaml if non-empty, else the named env var.
 func stringWithEnvFallback(yaml, envKey string) string {
 	if yaml != "" {
@@ -136,13 +160,15 @@ func stringWithEnvFallback(yaml, envKey string) string {
 	return os.Getenv(envKey)
 }
 
-// resolveTLSEnabled returns the YAML value if it is true, otherwise consults
-// REDPANDA_TLS_ENABLED. The env var accepts any value ParseBool understands
-// (1, t, T, true, TRUE, ...). An invalid env value is a config error rather
-// than a silent default-to-false.
-func resolveTLSEnabled(yamlValue bool) (bool, error) {
-	if yamlValue {
-		return true, nil
+// resolveTLSEnabled honors the documented YAML-wins-when-set rule. A YAML
+// value (true OR explicit false) overrides any env var; only when YAML is
+// absent (nil pointer) is REDPANDA_TLS_ENABLED consulted. The env var
+// accepts any value strconv.ParseBool understands (1, t, T, true, TRUE,
+// ...). An invalid env value is a config error rather than a silent
+// default-to-false.
+func resolveTLSEnabled(yamlValue *bool) (bool, error) {
+	if yamlValue != nil {
+		return *yamlValue, nil
 	}
 	raw := os.Getenv("REDPANDA_TLS_ENABLED")
 	if raw == "" {
