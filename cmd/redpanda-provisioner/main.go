@@ -28,6 +28,8 @@ func main() {
 	saslMechanism := envOrDefault("REDPANDA_SASL_MECHANISM", "SCRAM-SHA-256")
 	tlsEnabled := envOrDefault("REDPANDA_TLS_ENABLED", "false")
 	schemaRegistryURL := os.Getenv("SCHEMA_REGISTRY_URL")
+	schemaRegistryUsername := os.Getenv("SCHEMA_REGISTRY_USERNAME")
+	schemaRegistryPassword := os.Getenv("SCHEMA_REGISTRY_PASSWORD")
 	configPath := envOrDefault("REDPANDA_CONFIG_PATH", "./config.yaml")
 
 	slog.Info("Loading configuration", "path", configPath)
@@ -53,17 +55,24 @@ func main() {
 	}
 	defer adminClient.Close()
 
+	// Only connect to Schema Registry when schemas are actually configured.
+	// Eagerly connecting against a misconfigured (or unreachable) SR would
+	// otherwise block the Job for the full 5-minute retry window even when
+	// no schema work is needed.
 	var schemaClient *client.SchemaRegistryClient
-	if schemaRegistryURL != "" {
-		slog.Info("Connecting to Schema Registry", "url", schemaRegistryURL)
-		schemaClient, err = client.ConnectSchemaRegistry(ctx, schemaRegistryURL)
+	if len(cfg.Schemas) > 0 {
+		if schemaRegistryURL == "" {
+			slog.Error("Schema Registry URL required when schemas are configured (set SCHEMA_REGISTRY_URL)")
+			os.Exit(1)
+		}
+		slog.Info("Connecting to Schema Registry", "url", schemaRegistryURL, "auth", schemaRegistryUsername != "")
+		schemaClient, err = client.ConnectSchemaRegistry(ctx, schemaRegistryURL, schemaRegistryUsername, schemaRegistryPassword)
 		if err != nil {
 			slog.Error("Failed to connect to Schema Registry", "error", err)
 			os.Exit(1)
 		}
-	} else if len(cfg.Schemas) > 0 {
-		slog.Error("Schema Registry URL required when schemas are configured (set SCHEMA_REGISTRY_URL)")
-		os.Exit(1)
+	} else if schemaRegistryURL != "" {
+		slog.Info("Skipping Schema Registry connection — no schemas configured", "url", schemaRegistryURL)
 	}
 
 	p := provisioner.New(adminClient, schemaClient, cfg)

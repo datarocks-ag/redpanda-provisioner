@@ -399,6 +399,56 @@ func TestValidateUserNullByteUsername(t *testing.T) {
 	}
 }
 
+func TestValidateUserIterationsBelowMinimumRejected(t *testing.T) {
+	yaml := `
+users:
+  - username: svc
+    password: pass
+    mechanism: SCRAM-SHA-256
+    iterations: 1024
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for iterations < 4096")
+	}
+}
+
+func TestValidateUserIterationsZeroAccepted(t *testing.T) {
+	yaml := `
+users:
+  - username: svc
+    password: pass
+    mechanism: SCRAM-SHA-256
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected zero iterations to be accepted (default applied at provision time), got: %v", err)
+	}
+	if cfg.Users[0].Iterations != 0 {
+		t.Errorf("expected unset iterations to remain 0 in config, got %d", cfg.Users[0].Iterations)
+	}
+}
+
+func TestValidateUserIterationsAtMinimumAccepted(t *testing.T) {
+	yaml := `
+users:
+  - username: svc
+    password: pass
+    mechanism: SCRAM-SHA-256
+    iterations: 4096
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected iterations=4096 to be accepted, got: %v", err)
+	}
+	if cfg.Users[0].Iterations != 4096 {
+		t.Errorf("expected iterations 4096, got %d", cfg.Users[0].Iterations)
+	}
+}
+
 func TestValidateACLMissingPrincipal(t *testing.T) {
 	yaml := `
 acls:

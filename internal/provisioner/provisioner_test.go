@@ -14,13 +14,13 @@ import (
 
 // mockKafkaAdmin implements KafkaAdmin for unit tests.
 type mockKafkaAdmin struct {
-	listTopicsFn         func(ctx context.Context, topics ...string) (kadm.TopicDetails, error)
-	createTopicsFn       func(ctx context.Context, partitions int32, replicationFactor int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error)
-	updatePartitionsFn   func(ctx context.Context, partitions int, topics ...string) (kadm.CreatePartitionsResponses, error)
-	describeTopicCfgsFn  func(ctx context.Context, topics ...string) (kadm.ResourceConfigs, error)
-	alterTopicCfgsFn     func(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error)
-	alterUserSCRAMsFn    func(ctx context.Context, del []kadm.DeleteSCRAM, upsert []kadm.UpsertSCRAM) (kadm.AlteredUserSCRAMs, error)
-	createACLsFn         func(ctx context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error)
+	listTopicsFn        func(ctx context.Context, topics ...string) (kadm.TopicDetails, error)
+	createTopicsFn      func(ctx context.Context, partitions int32, replicationFactor int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error)
+	updatePartitionsFn  func(ctx context.Context, partitions int, topics ...string) (kadm.CreatePartitionsResponses, error)
+	describeTopicCfgsFn func(ctx context.Context, topics ...string) (kadm.ResourceConfigs, error)
+	alterTopicCfgsFn    func(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error)
+	alterUserSCRAMsFn   func(ctx context.Context, del []kadm.DeleteSCRAM, upsert []kadm.UpsertSCRAM) (kadm.AlteredUserSCRAMs, error)
+	createACLsFn        func(ctx context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error)
 }
 
 func (m *mockKafkaAdmin) ListTopics(ctx context.Context, topics ...string) (kadm.TopicDetails, error) {
@@ -905,6 +905,54 @@ func TestEnsureUser_SHA512(t *testing.T) {
 	}
 	if gotMechanism != kadm.ScramSha512 {
 		t.Errorf("expected ScramSha512, got %v", gotMechanism)
+	}
+}
+
+func TestEnsureUser_DefaultIterations(t *testing.T) {
+	var gotIterations int32
+	admin := &mockKafkaAdmin{
+		alterUserSCRAMsFn: func(ctx context.Context, del []kadm.DeleteSCRAM, upsert []kadm.UpsertSCRAM) (kadm.AlteredUserSCRAMs, error) {
+			gotIterations = upsert[0].Iterations
+			return kadm.AlteredUserSCRAMs{}, nil
+		},
+	}
+	p := New(admin, nil, &config.Config{})
+
+	err := p.ensureUser(context.Background(), config.User{
+		Username:  "svc",
+		Password:  "pass",
+		Mechanism: "SCRAM-SHA-256",
+		// Iterations left zero — provisioner must apply the RFC 5802 minimum.
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotIterations != int32(config.MinSCRAMIterations) {
+		t.Errorf("expected default iterations %d, got %d", config.MinSCRAMIterations, gotIterations)
+	}
+}
+
+func TestEnsureUser_ExplicitIterations(t *testing.T) {
+	var gotIterations int32
+	admin := &mockKafkaAdmin{
+		alterUserSCRAMsFn: func(ctx context.Context, del []kadm.DeleteSCRAM, upsert []kadm.UpsertSCRAM) (kadm.AlteredUserSCRAMs, error) {
+			gotIterations = upsert[0].Iterations
+			return kadm.AlteredUserSCRAMs{}, nil
+		},
+	}
+	p := New(admin, nil, &config.Config{})
+
+	err := p.ensureUser(context.Background(), config.User{
+		Username:   "svc",
+		Password:   "pass",
+		Mechanism:  "SCRAM-SHA-256",
+		Iterations: 8192,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotIterations != 8192 {
+		t.Errorf("expected configured iterations 8192, got %d", gotIterations)
 	}
 }
 

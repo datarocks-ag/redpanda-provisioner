@@ -20,6 +20,30 @@ func newTestClient(t *testing.T, handler http.Handler) *SchemaRegistryClient {
 	}
 }
 
+func newTestClientWithAuth(t *testing.T, username, password string, handler http.Handler) *SchemaRegistryClient {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return &SchemaRegistryClient{
+		baseURL:    srv.URL,
+		httpClient: srv.Client(),
+		username:   username,
+		password:   password,
+	}
+}
+
+func assertBasicAuth(t *testing.T, r *http.Request, wantUser, wantPass string) {
+	t.Helper()
+	gotUser, gotPass, ok := r.BasicAuth()
+	if !ok {
+		t.Errorf("expected basic auth header on %s %s, got none", r.Method, r.URL.Path)
+		return
+	}
+	if gotUser != wantUser || gotPass != wantPass {
+		t.Errorf("basic auth mismatch on %s %s: got %q/%q, want %q/%q", r.Method, r.URL.Path, gotUser, gotPass, wantUser, wantPass)
+	}
+}
+
 func TestRegisterSchema_Success(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -245,6 +269,60 @@ func TestGetCompatibility_DecodeError(t *testing.T) {
 	_, err := client.GetCompatibility(context.Background(), "test-value")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
+	}
+}
+
+func TestBasicAuth_AppliedOnAllRequests(t *testing.T) {
+	const user, pass = "alice", "s3cret"
+
+	tests := []struct {
+		name string
+		call func(*testing.T, *SchemaRegistryClient)
+	}{
+		{"ping", func(t *testing.T, c *SchemaRegistryClient) {
+			if err := c.ping(context.Background()); err != nil {
+				t.Fatalf("ping: %v", err)
+			}
+		}},
+		{"RegisterSchema", func(t *testing.T, c *SchemaRegistryClient) {
+			if _, err := c.RegisterSchema(context.Background(), "s", "AVRO", "{}"); err != nil {
+				t.Fatalf("RegisterSchema: %v", err)
+			}
+		}},
+		{"SetCompatibility", func(t *testing.T, c *SchemaRegistryClient) {
+			if err := c.SetCompatibility(context.Background(), "s", "BACKWARD"); err != nil {
+				t.Fatalf("SetCompatibility: %v", err)
+			}
+		}},
+		{"GetCompatibility", func(t *testing.T, c *SchemaRegistryClient) {
+			if _, err := c.GetCompatibility(context.Background(), "s"); err != nil {
+				t.Fatalf("GetCompatibility: %v", err)
+			}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestClientWithAuth(t, user, pass, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assertBasicAuth(t, r, user, pass)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":1,"compatibilityLevel":"FULL"}`))
+			}))
+			tt.call(t, c)
+		})
+	}
+}
+
+func TestNoBasicAuth_WhenCredentialsEmpty(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := r.BasicAuth(); ok {
+			t.Errorf("did not expect basic auth header, got one on %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	if err := c.ping(context.Background()); err != nil {
+		t.Fatalf("ping: %v", err)
 	}
 }
 

@@ -50,7 +50,7 @@ func setupRedpanda(t *testing.T) testCluster {
 
 	adminClient := client.NewAdminClient(kClient)
 
-	schemaClient, err := client.ConnectSchemaRegistry(ctx, srAddr)
+	schemaClient, err := client.ConnectSchemaRegistry(ctx, srAddr, "", "")
 	if err != nil {
 		kClient.Close()
 		t.Fatalf("failed to connect to schema registry: %v", err)
