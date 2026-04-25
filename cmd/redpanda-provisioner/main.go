@@ -46,13 +46,6 @@ func Run(ctx context.Context) error {
 	schemaRegistryPassword := os.Getenv("SCHEMA_REGISTRY_PASSWORD")
 	configPath := envOrDefault("REDPANDA_CONFIG_PATH", "./config.yaml")
 
-	// Reject half-set credentials at startup so a typo in one of the two env
-	// vars surfaces as a clear configuration error rather than as a confusing
-	// 401 from the Schema Registry on the first authenticated request.
-	if (schemaRegistryUsername == "") != (schemaRegistryPassword == "") {
-		return fmt.Errorf("SCHEMA_REGISTRY_USERNAME and SCHEMA_REGISTRY_PASSWORD must both be set or both be empty")
-	}
-
 	slog.Info("Loading configuration", "path", configPath)
 	cfg, err := config.Load(configPath)
 	if err != nil {

@@ -313,6 +313,27 @@ func TestBasicAuth_AppliedOnAllRequests(t *testing.T) {
 	}
 }
 
+func TestConnectSchemaRegistry_RejectsHalfSetCredentials(t *testing.T) {
+	cases := []struct {
+		name           string
+		user, password string
+	}{
+		{"username-only", "alice", ""},
+		{"password-only", "", "s3cret"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ConnectSchemaRegistry(context.Background(), "http://127.0.0.1:1", tc.user, tc.password)
+			if err == nil {
+				t.Fatal("expected error for half-set credentials, got nil")
+			}
+			if !strings.Contains(err.Error(), "both be set or both be empty") {
+				t.Errorf("unexpected error message: %v", err)
+			}
+		})
+	}
+}
+
 func TestNoBasicAuth_WhenCredentialsEmpty(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := r.BasicAuth(); ok {

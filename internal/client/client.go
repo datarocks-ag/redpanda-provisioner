@@ -138,8 +138,14 @@ type SchemaRegistryClient struct {
 }
 
 // ConnectSchemaRegistry establishes a connection to the Schema Registry with
-// retry. Pass empty username/password for unauthenticated registries.
+// retry. Pass empty username/password for unauthenticated registries; partial
+// credentials (one set, the other empty) are rejected here so misconfiguration
+// fails fast at the API boundary instead of producing a confusing 401 on the
+// first authenticated request.
 func ConnectSchemaRegistry(ctx context.Context, baseURL, username, password string) (*SchemaRegistryClient, error) {
+	if (username == "") != (password == "") {
+		return nil, fmt.Errorf("schema registry username and password must both be set or both be empty")
+	}
 	baseURL = strings.TrimRight(baseURL, "/")
 	client := &SchemaRegistryClient{
 		baseURL:    baseURL,
