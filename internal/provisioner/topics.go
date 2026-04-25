@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -156,9 +157,19 @@ func (p *Provisioner) updateTopic(ctx context.Context, topic config.Topic, exist
 		}
 	}
 
-	// Find configs that need updating
+	// Find configs that need updating. Iterate in sorted-key order so that
+	// log output and the AlterConfig batch are deterministic across runs —
+	// map iteration order in Go is randomized, which previously made diff
+	// output and broker call ordering vary between otherwise-identical runs.
+	keys := make([]string, 0, len(topic.Config))
+	for k := range topic.Config {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var alters []kadm.AlterConfig
-	for key, desired := range topic.Config {
+	for _, key := range keys {
+		desired := topic.Config[key]
 		current, exists := currentConfigs[key]
 		if !exists || current != desired {
 			slog.Info("Updating topic config",
