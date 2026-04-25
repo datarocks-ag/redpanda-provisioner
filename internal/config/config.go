@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -147,6 +148,11 @@ func expandConfig(cfg *Config) {
 }
 
 // Load reads and parses a YAML config file, expanding env vars and validating.
+//
+// Relative schema file paths are resolved against the directory containing
+// the config file, not the process working directory — so a config mounted
+// at /config/config.yaml referencing schemas/orders.avsc reads from
+// /config/schemas/orders.avsc regardless of where the binary was started.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -160,11 +166,40 @@ func Load(path string) (*Config, error) {
 
 	expandConfig(&cfg)
 
+	configDir, err := configDirFromPath(path)
+	if err != nil {
+		return nil, err
+	}
+	resolveSchemaPaths(&cfg, configDir)
+
 	if err := validate(&cfg); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+// configDirFromPath returns the absolute directory holding the config file,
+// used as the base for resolving relative schema paths.
+func configDirFromPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving config path: %w", err)
+	}
+	return filepath.Dir(abs), nil
+}
+
+// resolveSchemaPaths rewrites each Schema.File to an absolute path. Relative
+// entries are resolved against configDir; absolute entries are kept as-is.
+// Empty entries are left alone so validation can produce the right error.
+func resolveSchemaPaths(cfg *Config, configDir string) {
+	for i := range cfg.Schemas {
+		f := cfg.Schemas[i].File
+		if f == "" || filepath.IsAbs(f) {
+			continue
+		}
+		cfg.Schemas[i].File = filepath.Join(configDir, f)
+	}
 }
 
 var validSchemaTypes = map[string]bool{
