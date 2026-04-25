@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -683,6 +684,47 @@ schemas:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for missing schema type")
+	}
+}
+
+func TestSchemaPathResolvedRelativeToConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+schemas:
+  - subject: orders-value
+    type: avro
+    file: schemas/orders.avsc
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := filepath.Join(dir, "schemas", "orders.avsc")
+	if cfg.Schemas[0].File != want {
+		t.Errorf("schema file path: got %q, want %q", cfg.Schemas[0].File, want)
+	}
+}
+
+func TestSchemaAbsolutePathPreserved(t *testing.T) {
+	abs := filepath.Join(t.TempDir(), "absolute.avsc")
+	cfgPath := writeTempConfig(t, fmt.Sprintf(`
+schemas:
+  - subject: orders-value
+    type: avro
+    file: %s
+`, abs))
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Schemas[0].File != abs {
+		t.Errorf("absolute schema path mutated: got %q, want %q", cfg.Schemas[0].File, abs)
 	}
 }
 

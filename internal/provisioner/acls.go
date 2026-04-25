@@ -27,53 +27,56 @@ func (p *Provisioner) ensureACL(ctx context.Context, acl config.ACL) error {
 		return err
 	}
 
+	operations := make([]kmsg.ACLOperation, 0, len(acl.Operations))
 	for _, op := range acl.Operations {
 		operation, err := parseOperation(op)
 		if err != nil {
 			return err
 		}
+		operations = append(operations, operation)
+	}
 
-		slog.Info("Ensuring ACL",
-			"principal", acl.Principal,
-			"operation", op,
-			"resource_type", acl.ResourceType,
-			"resource_name", acl.ResourceName,
-			"pattern", acl.Pattern,
-			"permission", acl.Permission,
-		)
+	slog.Info("Ensuring ACL",
+		"principal", acl.Principal,
+		"operations", acl.Operations,
+		"resource_type", acl.ResourceType,
+		"resource_name", acl.ResourceName,
+		"pattern", acl.Pattern,
+		"permission", acl.Permission,
+	)
 
-		// CreateACLs is idempotent in the Kafka protocol
-		builder := kadm.NewACLs().
-			Allow(acl.Principal).
-			ResourcePatternType(patternType).
-			Operations(operation)
+	// CreateACLs is idempotent in the Kafka protocol; a single call carries
+	// all operations for one (principal, resource, pattern, permission)
+	// tuple. Earlier this was looped per-operation, which produced N
+	// round-trips for an ACL like {operations: [read, describe, write]}.
+	builder := kadm.NewACLs().
+		ResourcePatternType(patternType).
+		Operations(operations...)
 
-		if permissionType == kmsg.ACLPermissionTypeDeny {
-			builder = kadm.NewACLs().
-				Deny(acl.Principal).
-				ResourcePatternType(patternType).
-				Operations(operation)
-		}
+	if permissionType == kmsg.ACLPermissionTypeDeny {
+		builder.Deny(acl.Principal)
+	} else {
+		builder.Allow(acl.Principal)
+	}
 
-		switch resourceType {
-		case kmsg.ACLResourceTypeTopic:
-			builder.Topics(acl.ResourceName)
-		case kmsg.ACLResourceTypeGroup:
-			builder.Groups(acl.ResourceName)
-		case kmsg.ACLResourceTypeCluster:
-			builder.Clusters()
-		case kmsg.ACLResourceTypeTransactionalId:
-			builder.TransactionalIDs(acl.ResourceName)
-		}
+	switch resourceType {
+	case kmsg.ACLResourceTypeTopic:
+		builder.Topics(acl.ResourceName)
+	case kmsg.ACLResourceTypeGroup:
+		builder.Groups(acl.ResourceName)
+	case kmsg.ACLResourceTypeCluster:
+		builder.Clusters()
+	case kmsg.ACLResourceTypeTransactionalId:
+		builder.TransactionalIDs(acl.ResourceName)
+	}
 
-		results, err := p.admin.CreateACLs(ctx, builder)
-		if err != nil {
-			return fmt.Errorf("creating ACL: %w", err)
-		}
-		for _, r := range results {
-			if r.Err != nil {
-				return fmt.Errorf("creating ACL for %q: %w", acl.Principal, r.Err)
-			}
+	results, err := p.admin.CreateACLs(ctx, builder)
+	if err != nil {
+		return fmt.Errorf("creating ACL: %w", err)
+	}
+	for _, r := range results {
+		if r.Err != nil {
+			return fmt.Errorf("creating ACL for %q: %w", acl.Principal, r.Err)
 		}
 	}
 

@@ -397,6 +397,64 @@ func TestUpdateTopic_ConfigUpdate(t *testing.T) {
 	}
 }
 
+// TestUpdateTopic_ConfigDeterministicOrder pins two contracts:
+//  1. The alter batch is built in sorted-key order, so log output and the
+//     AlterConfig sequence are stable across runs (Go's map iteration is
+//     randomized).
+//  2. Each AlterConfig.Value points to that iteration's value, not a
+//     shared/aliased pointer. If the loop ever gets refactored back to a
+//     header-form `for k, v := range topic.Config`, every Value would end
+//     up pointing at the same string and this assertion would catch it.
+func TestUpdateTopic_ConfigDeterministicOrder(t *testing.T) {
+	admin := &mockKafkaAdmin{
+		listTopicsFn: func(ctx context.Context, topics ...string) (kadm.TopicDetails, error) {
+			return kadm.TopicDetails{
+				"test": kadm.TopicDetail{
+					Topic:      "test",
+					Partitions: kadm.PartitionDetails{0: {}},
+				},
+			}, nil
+		},
+		describeTopicCfgsFn: func(ctx context.Context, topics ...string) (kadm.ResourceConfigs, error) {
+			return kadm.ResourceConfigs{{Name: "test"}}, nil
+		},
+		alterTopicCfgsFn: func(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error) {
+			wantNames := []string{"a.first", "b.second", "c.third", "d.fourth"}
+			wantValues := []string{"1", "2", "3", "4"}
+			if len(configs) != len(wantNames) {
+				t.Fatalf("expected %d alters, got %d", len(wantNames), len(configs))
+			}
+			for i := range wantNames {
+				if configs[i].Name != wantNames[i] {
+					t.Errorf("alter[%d].Name: got %q, want %q", i, configs[i].Name, wantNames[i])
+				}
+				if configs[i].Value == nil {
+					t.Errorf("alter[%d].Value: got nil, want %q", i, wantValues[i])
+					continue
+				}
+				if *configs[i].Value != wantValues[i] {
+					t.Errorf("alter[%d].Value: got %q, want %q", i, *configs[i].Value, wantValues[i])
+				}
+			}
+			return kadm.AlterConfigsResponses{}, nil
+		},
+	}
+	p := New(admin, nil, &config.Config{})
+
+	topic := config.Topic{
+		Name: "test",
+		Config: map[string]string{
+			"d.fourth": "4",
+			"a.first":  "1",
+			"c.third":  "3",
+			"b.second": "2",
+		},
+	}
+	if err := p.ensureTopic(context.Background(), topic, "update"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestUpdateTopic_ConfigUpToDate(t *testing.T) {
 	retVal := "259200000"
 	alterCalled := false
@@ -1032,6 +1090,35 @@ func TestEnsureACL_AllowOnTopic(t *testing.T) {
 	}
 	if !createCalled {
 		t.Error("expected CreateACLs to be called")
+	}
+}
+
+// TestEnsureACL_BatchesOperations pins the contract that one config ACL
+// entry produces exactly one CreateACLs round-trip, regardless of how many
+// operations it carries. Prior to batching this issued N calls.
+func TestEnsureACL_BatchesOperations(t *testing.T) {
+	calls := 0
+	admin := &mockKafkaAdmin{
+		createACLsFn: func(ctx context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error) {
+			calls++
+			return kadm.CreateACLsResults{}, nil
+		},
+	}
+	p := New(admin, nil, &config.Config{})
+
+	err := p.ensureACL(context.Background(), config.ACL{
+		Principal:    "User:svc",
+		Operations:   []string{"read", "describe", "write"},
+		ResourceType: "topic",
+		ResourceName: "orders",
+		Pattern:      "literal",
+		Permission:   "allow",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 CreateACLs call for batched operations, got %d", calls)
 	}
 }
 
