@@ -16,16 +16,10 @@ func (p *Provisioner) ensureSchema(ctx context.Context, schema config.Schema) er
 		return fmt.Errorf("reading schema file %q: %w", schema.File, err)
 	}
 
-	// Map config type to Schema Registry type string
+	// Schema Registry expects the type as an uppercase token (AVRO, PROTOBUF,
+	// JSON). The lowercase value has already been gated by config validation,
+	// so a plain ToUpper is sufficient.
 	schemaType := strings.ToUpper(schema.Type)
-	switch schema.Type {
-	case "avro":
-		schemaType = "AVRO"
-	case "protobuf":
-		schemaType = "PROTOBUF"
-	case "json":
-		schemaType = "JSON"
-	}
 
 	slog.Info("Registering schema", "subject", schema.Subject, "type", schemaType)
 	id, err := p.schema.RegisterSchema(ctx, schema.Subject, schemaType, string(schemaContent))
