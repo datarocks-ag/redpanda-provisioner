@@ -2,24 +2,43 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 
 	"redpanda-provisioner/internal/config"
 )
 
 func (p *Provisioner) ensureTopic(ctx context.Context, topic config.Topic, strategy string) error {
-	topics, err := p.admin.ListTopics(ctx, topic.Name)
+	existing, err := p.lookupTopic(ctx, topic.Name)
 	if err != nil {
-		return fmt.Errorf("listing topics: %w", err)
+		return err
 	}
 
-	existing, exists := topics[topic.Name]
-
-	if !exists || existing.Err != nil {
-		return p.createTopic(ctx, topic)
+	if existing == nil {
+		createErr := p.createTopic(ctx, topic)
+		if createErr == nil {
+			return nil
+		}
+		// The franz-go metadata cache (default 5s TTL) may report a topic as
+		// missing immediately after a previous run created it. If the broker
+		// rejects the create as duplicate, the topic does in fact exist —
+		// purge the cache and re-fetch so the update path sees real state.
+		if !errors.Is(createErr, kerr.TopicAlreadyExists) {
+			return createErr
+		}
+		slog.Info("Topic already exists; refreshing stale metadata", "topic", topic.Name)
+		p.purgeTopicCache(topic.Name)
+		existing, err = p.lookupTopic(ctx, topic.Name)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("topic %q reported as already-exists but not visible after metadata refresh", topic.Name)
+		}
 	}
 
 	if strategy == "create" {
@@ -27,7 +46,29 @@ func (p *Provisioner) ensureTopic(ctx context.Context, topic config.Topic, strat
 		return nil
 	}
 
-	return p.updateTopic(ctx, topic, existing)
+	return p.updateTopic(ctx, topic, *existing)
+}
+
+// lookupTopic returns the current topic detail, or nil if the topic does not
+// exist on the broker. A topic-level UnknownTopicOrPartition error is treated
+// as "does not exist" rather than an error, since that is what the broker
+// returns for unknown topics.
+func (p *Provisioner) lookupTopic(ctx context.Context, name string) (*kadm.TopicDetail, error) {
+	topics, err := p.admin.ListTopics(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("listing topics: %w", err)
+	}
+	detail, ok := topics[name]
+	if !ok {
+		return nil, nil
+	}
+	if detail.Err != nil {
+		if errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("looking up topic %q: %w", name, detail.Err)
+	}
+	return &detail, nil
 }
 
 func (p *Provisioner) createTopic(ctx context.Context, topic config.Topic) error {

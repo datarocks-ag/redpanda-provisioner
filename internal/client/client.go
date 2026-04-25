@@ -25,16 +25,19 @@ const (
 	totalTimeout = 5 * time.Minute
 )
 
-// AdminClient wraps a franz-go admin client for Kafka operations.
+// AdminClient wraps a franz-go admin client for Kafka operations. It embeds
+// *kadm.Client so all kadm methods are promoted directly onto the wrapper,
+// and adds [AdminClient.PurgeTopicCache] for invalidating stale topic
+// metadata held by the underlying kgo client.
 type AdminClient struct {
-	Admin    *kadm.Client
-	kClient  *kgo.Client
+	*kadm.Client
+	kClient *kgo.Client
 }
 
 // NewAdminClient wraps an existing kgo.Client as an AdminClient.
 func NewAdminClient(kClient *kgo.Client) *AdminClient {
 	return &AdminClient{
-		Admin:   kadm.NewClient(kClient),
+		Client:  kadm.NewClient(kClient),
 		kClient: kClient,
 	}
 }
@@ -42,6 +45,13 @@ func NewAdminClient(kClient *kgo.Client) *AdminClient {
 // Close closes the underlying Kafka client.
 func (c *AdminClient) Close() {
 	c.kClient.Close()
+}
+
+// PurgeTopicCache evicts the named topics from the underlying kgo client's
+// metadata cache so that the next metadata-backed call (e.g. ListTopics) is
+// served from a fresh broker query instead of stale cached state.
+func (c *AdminClient) PurgeTopicCache(topics ...string) {
+	c.kClient.PurgeTopicsFromClient(topics...)
 }
 
 // Connect establishes a Kafka admin connection with exponential backoff retry.
@@ -54,7 +64,7 @@ func Connect(ctx context.Context, brokers []string, username, password, mechanis
 		if err == nil {
 			// Verify connectivity by requesting metadata
 			ac := NewAdminClient(client)
-			_, err = ac.Admin.ListBrokers(ctx)
+			_, err = ac.ListBrokers(ctx)
 			if err == nil {
 				slog.Info("Connected to Redpanda", "brokers", brokers)
 				return ac, nil

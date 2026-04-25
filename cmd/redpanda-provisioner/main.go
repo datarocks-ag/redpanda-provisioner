@@ -66,7 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := provisioner.New(adminClient.Admin, schemaClient, cfg)
+	p := provisioner.New(adminClient, schemaClient, cfg)
 	if err := p.Run(ctx); err != nil {
 		slog.Error("Provisioning failed", "error", err)
 		os.Exit(1)
