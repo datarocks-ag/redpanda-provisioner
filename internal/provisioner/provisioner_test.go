@@ -397,6 +397,52 @@ func TestUpdateTopic_ConfigUpdate(t *testing.T) {
 	}
 }
 
+// TestUpdateTopic_ConfigDeterministicOrder pins the iteration order of the
+// alter batch to sorted-key order. Without sorting, Go's randomized map
+// iteration would let this test pass or fail depending on the run, and
+// downstream log/diff output would shuffle on every reconciliation.
+func TestUpdateTopic_ConfigDeterministicOrder(t *testing.T) {
+	admin := &mockKafkaAdmin{
+		listTopicsFn: func(ctx context.Context, topics ...string) (kadm.TopicDetails, error) {
+			return kadm.TopicDetails{
+				"test": kadm.TopicDetail{
+					Topic:      "test",
+					Partitions: kadm.PartitionDetails{0: {}},
+				},
+			}, nil
+		},
+		describeTopicCfgsFn: func(ctx context.Context, topics ...string) (kadm.ResourceConfigs, error) {
+			return kadm.ResourceConfigs{{Name: "test"}}, nil
+		},
+		alterTopicCfgsFn: func(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error) {
+			want := []string{"a.first", "b.second", "c.third", "d.fourth"}
+			if len(configs) != len(want) {
+				t.Fatalf("expected %d alters, got %d", len(want), len(configs))
+			}
+			for i, w := range want {
+				if configs[i].Name != w {
+					t.Errorf("alter[%d]: got %q, want %q", i, configs[i].Name, w)
+				}
+			}
+			return kadm.AlterConfigsResponses{}, nil
+		},
+	}
+	p := New(admin, nil, &config.Config{})
+
+	topic := config.Topic{
+		Name: "test",
+		Config: map[string]string{
+			"d.fourth": "4",
+			"a.first":  "1",
+			"c.third":  "3",
+			"b.second": "2",
+		},
+	}
+	if err := p.ensureTopic(context.Background(), topic, "update"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestUpdateTopic_ConfigUpToDate(t *testing.T) {
 	retVal := "259200000"
 	alterCalled := false
@@ -1032,6 +1078,35 @@ func TestEnsureACL_AllowOnTopic(t *testing.T) {
 	}
 	if !createCalled {
 		t.Error("expected CreateACLs to be called")
+	}
+}
+
+// TestEnsureACL_BatchesOperations pins the contract that one config ACL
+// entry produces exactly one CreateACLs round-trip, regardless of how many
+// operations it carries. Prior to batching this issued N calls.
+func TestEnsureACL_BatchesOperations(t *testing.T) {
+	calls := 0
+	admin := &mockKafkaAdmin{
+		createACLsFn: func(ctx context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error) {
+			calls++
+			return kadm.CreateACLsResults{}, nil
+		},
+	}
+	p := New(admin, nil, &config.Config{})
+
+	err := p.ensureACL(context.Background(), config.ACL{
+		Principal:    "User:svc",
+		Operations:   []string{"read", "describe", "write"},
+		ResourceType: "topic",
+		ResourceName: "orders",
+		Pattern:      "literal",
+		Permission:   "allow",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 CreateACLs call for batched operations, got %d", calls)
 	}
 }
 
