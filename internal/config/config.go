@@ -31,11 +31,48 @@ func EffectiveStrategy(strategies ...string) string {
 
 // Config is the top-level YAML configuration.
 type Config struct {
-	Strategy string   `yaml:"strategy"`
-	Topics   []Topic  `yaml:"topics"`
-	Schemas  []Schema `yaml:"schemas"`
-	Users    []User   `yaml:"users"`
-	ACLs     []ACL    `yaml:"acls"`
+	Strategy       string         `yaml:"strategy"`
+	Broker         Broker         `yaml:"broker"`
+	SchemaRegistry SchemaRegistry `yaml:"schema_registry"`
+	Topics         []Topic        `yaml:"topics"`
+	Schemas        []Schema       `yaml:"schemas"`
+	Users          []User         `yaml:"users"`
+	ACLs           []ACL          `yaml:"acls"`
+}
+
+// Broker describes how to connect to the Redpanda/Kafka broker.
+//
+// All fields are optional in YAML; legacy env vars (REDPANDA_BROKERS,
+// REDPANDA_SASL_*, REDPANDA_TLS_ENABLED) act as a fallback when the
+// corresponding YAML field is empty. This keeps existing env-only
+// deployments working while letting new configs put everything in YAML.
+type Broker struct {
+	Addresses []string   `yaml:"addresses"`
+	SASL      BrokerSASL `yaml:"sasl"`
+	TLS       BrokerTLS  `yaml:"tls"`
+}
+
+// BrokerSASL holds SASL/SCRAM credentials for the Kafka client.
+type BrokerSASL struct {
+	Mechanism string `yaml:"mechanism"`
+	Username  string `yaml:"username"`
+	Password  string `yaml:"password"`
+}
+
+// BrokerTLS toggles TLS for the Kafka client. The current implementation
+// only takes a boolean; richer TLS config (CA bundle, mTLS, ServerName) is
+// tracked separately in the review backlog (M2).
+type BrokerTLS struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// SchemaRegistry describes how to reach the Schema Registry HTTP API.
+// Username/password are HTTP basic auth; both must be set or both empty
+// (the partial-credentials check lives in the client package).
+type SchemaRegistry struct {
+	URL      string `yaml:"url"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // Topic defines a Kafka topic to provision.
@@ -156,6 +193,17 @@ func expandConfig(cfg *Config) error {
 	}
 
 	expand("strategy", &cfg.Strategy)
+
+	for i := range cfg.Broker.Addresses {
+		expand(fmt.Sprintf("broker.addresses[%d]", i), &cfg.Broker.Addresses[i])
+	}
+	expand("broker.sasl.mechanism", &cfg.Broker.SASL.Mechanism)
+	expand("broker.sasl.username", &cfg.Broker.SASL.Username)
+	expand("broker.sasl.password", &cfg.Broker.SASL.Password)
+
+	expand("schema_registry.url", &cfg.SchemaRegistry.URL)
+	expand("schema_registry.username", &cfg.SchemaRegistry.Username)
+	expand("schema_registry.password", &cfg.SchemaRegistry.Password)
 
 	for i := range cfg.Topics {
 		t := &cfg.Topics[i]
@@ -327,6 +375,12 @@ func validate(cfg *Config) error {
 		return err
 	}
 
+	if err := validateBroker(&cfg.Broker); err != nil {
+		return err
+	}
+	if err := validateSchemaRegistry(&cfg.SchemaRegistry); err != nil {
+		return err
+	}
 	if err := validateTopics(cfg.Topics); err != nil {
 		return err
 	}
@@ -337,6 +391,37 @@ func validate(cfg *Config) error {
 		return err
 	}
 	return validateACLs(cfg.ACLs)
+}
+
+// validateBroker checks broker config invariants. Empty broker config is
+// allowed — main.go falls back to env vars.
+func validateBroker(b *Broker) error {
+	for i, addr := range b.Addresses {
+		if addr == "" {
+			return fmt.Errorf("broker.addresses[%d]: must not be empty", i)
+		}
+		if containsNullByte(addr) {
+			return fmt.Errorf("broker.addresses[%d]: contains null byte", i)
+		}
+	}
+
+	if b.SASL.Mechanism != "" && !validSASLMechanism[b.SASL.Mechanism] {
+		return fmt.Errorf("broker.sasl.mechanism: invalid value %q (must be SCRAM-SHA-256 or SCRAM-SHA-512)", b.SASL.Mechanism)
+	}
+	if (b.SASL.Username == "") != (b.SASL.Password == "") {
+		return fmt.Errorf("broker.sasl: username and password must both be set or both be empty")
+	}
+	return nil
+}
+
+// validateSchemaRegistry mirrors the basic-auth pairing check in
+// client.ConnectSchemaRegistry so misconfiguration is caught at YAML load
+// instead of after retry exhaustion.
+func validateSchemaRegistry(sr *SchemaRegistry) error {
+	if (sr.Username == "") != (sr.Password == "") {
+		return fmt.Errorf("schema_registry: username and password must both be set or both be empty")
+	}
+	return nil
 }
 
 func validateTopics(topics []Topic) error {

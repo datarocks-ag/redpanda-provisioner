@@ -834,6 +834,111 @@ schemas:
 	}
 }
 
+func TestLoadBrokerAndSchemaRegistryFromYAML(t *testing.T) {
+	t.Setenv("BROKER_PASSWORD", "from-env")
+	t.Setenv("SR_PASSWORD", "sr-from-env")
+
+	yaml := `
+broker:
+  addresses:
+    - redpanda-a:9092
+    - redpanda-b:9092
+  sasl:
+    mechanism: SCRAM-SHA-512
+    username: admin
+    password: ${BROKER_PASSWORD}
+  tls:
+    enabled: true
+schema_registry:
+  url: http://sr.internal:8081
+  username: sr-user
+  password: ${SR_PASSWORD}
+`
+	cfg, err := Load(writeTempConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got := cfg.Broker.Addresses; len(got) != 2 || got[0] != "redpanda-a:9092" || got[1] != "redpanda-b:9092" {
+		t.Errorf("broker.addresses: got %v", got)
+	}
+	if cfg.Broker.SASL.Mechanism != "SCRAM-SHA-512" {
+		t.Errorf("broker.sasl.mechanism: got %q", cfg.Broker.SASL.Mechanism)
+	}
+	if cfg.Broker.SASL.Username != "admin" {
+		t.Errorf("broker.sasl.username: got %q", cfg.Broker.SASL.Username)
+	}
+	if cfg.Broker.SASL.Password != "from-env" {
+		t.Errorf("broker.sasl.password (env-expanded): got %q", cfg.Broker.SASL.Password)
+	}
+	if !cfg.Broker.TLS.Enabled {
+		t.Error("broker.tls.enabled: expected true")
+	}
+	if cfg.SchemaRegistry.URL != "http://sr.internal:8081" {
+		t.Errorf("schema_registry.url: got %q", cfg.SchemaRegistry.URL)
+	}
+	if cfg.SchemaRegistry.Password != "sr-from-env" {
+		t.Errorf("schema_registry.password (env-expanded): got %q", cfg.SchemaRegistry.Password)
+	}
+}
+
+func TestValidateBrokerInvalidMechanism(t *testing.T) {
+	yaml := `
+broker:
+  sasl:
+    mechanism: PLAIN
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for invalid broker SASL mechanism")
+	}
+}
+
+func TestValidateBrokerHalfSetCredentials(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"username-only", "broker:\n  sasl:\n    username: admin\n"},
+		{"password-only", "broker:\n  sasl:\n    password: secret\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tc.yaml))
+			if err == nil {
+				t.Fatal("expected error for half-set broker SASL credentials")
+			}
+			if !strings.Contains(err.Error(), "both be set or both be empty") {
+				t.Errorf("unexpected message: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateSchemaRegistryHalfSetCredentials(t *testing.T) {
+	yaml := `
+schema_registry:
+  url: http://sr:8081
+  username: only-user
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for half-set SR credentials")
+	}
+}
+
+func TestValidateBrokerEmptyAddressRejected(t *testing.T) {
+	yaml := `
+broker:
+  addresses:
+    - ""
+`
+	_, err := Load(writeTempConfig(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for empty broker address")
+	}
+}
+
 func TestEffectiveStrategy(t *testing.T) {
 	tests := []struct {
 		strategies []string

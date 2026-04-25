@@ -26,7 +26,15 @@ docker compose up
 
 This starts Redpanda and runs the provisioner with the example config.
 
-## Environment Variables
+## Configuration
+
+Connection details can be set in YAML (`broker:` and `schema_registry:`
+blocks) or via environment variables. **YAML wins when set; env vars fill in
+the rest** — so existing env-only deployments keep working unchanged. You
+can also embed env references inside YAML strings using `${VAR}` or
+`${VAR:-default}`.
+
+### Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -34,12 +42,33 @@ This starts Redpanda and runs the provisioner with the example config.
 | `REDPANDA_SASL_USERNAME` | no | — | SASL username |
 | `REDPANDA_SASL_PASSWORD` | no | — | SASL password |
 | `REDPANDA_SASL_MECHANISM` | no | `SCRAM-SHA-256` | SCRAM-SHA-256 or SCRAM-SHA-512 |
-| `REDPANDA_TLS_ENABLED` | no | `false` | Enable TLS |
+| `REDPANDA_TLS_ENABLED` | no | `false` | Enable TLS (any value `strconv.ParseBool` understands) |
 | `SCHEMA_REGISTRY_URL` | no | — | Schema Registry URL (required if schemas are configured) |
+| `SCHEMA_REGISTRY_USERNAME` | no | — | HTTP basic-auth user for SR |
+| `SCHEMA_REGISTRY_PASSWORD` | no | — | HTTP basic-auth password for SR |
 | `REDPANDA_CONFIG_PATH` | no | `./config.yaml` | Path to YAML config |
 | `LOG_LEVEL` | no | `info` | Log level (debug/info/warn/error) |
 
 All auth variables are optional (dev environments often have no auth).
+
+### YAML connection block
+
+```yaml
+broker:
+  addresses:
+    - redpanda:9092
+  sasl:
+    mechanism: SCRAM-SHA-256
+    username: ${REDPANDA_ADMIN_USERNAME}
+    password: ${REDPANDA_ADMIN_PASSWORD}
+  tls:
+    enabled: false
+
+schema_registry:
+  url: http://redpanda:8081
+  username: ${SR_USERNAME:-}
+  password: ${SR_PASSWORD:-}
+```
 
 ## Strategy
 

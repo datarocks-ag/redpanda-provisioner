@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"testing"
 )
 
@@ -56,6 +57,72 @@ func TestSetupLogging_Error(t *testing.T) {
 	}
 	if !slog.Default().Enabled(context.TODO(), slog.LevelError) {
 		t.Error("expected error level to be enabled")
+	}
+}
+
+func TestResolveBrokerAddresses_YAMLWins(t *testing.T) {
+	t.Setenv("REDPANDA_BROKERS", "env:9092")
+	got := resolveBrokerAddresses([]string{"yaml-a:9092", "yaml-b:9092"})
+	want := []string{"yaml-a:9092", "yaml-b:9092"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v (YAML should win when set)", got, want)
+	}
+}
+
+func TestResolveBrokerAddresses_EnvFallback(t *testing.T) {
+	t.Setenv("REDPANDA_BROKERS", "env-a:9092, env-b:9092")
+	got := resolveBrokerAddresses(nil)
+	want := []string{"env-a:9092", "env-b:9092"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v (env should fill in for empty YAML, with whitespace trimmed)", got, want)
+	}
+}
+
+func TestResolveBrokerAddresses_DefaultWhenNothingSet(t *testing.T) {
+	t.Setenv("REDPANDA_BROKERS", "")
+	got := resolveBrokerAddresses(nil)
+	want := []string{"localhost:9092"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestStringWithEnvFallback(t *testing.T) {
+	t.Setenv("FALLBACK_KEY", "from-env")
+	if got := stringWithEnvFallback("from-yaml", "FALLBACK_KEY"); got != "from-yaml" {
+		t.Errorf("YAML should win when set, got %q", got)
+	}
+	if got := stringWithEnvFallback("", "FALLBACK_KEY"); got != "from-env" {
+		t.Errorf("env fallback should fire when YAML empty, got %q", got)
+	}
+	t.Setenv("FALLBACK_KEY", "")
+	if got := stringWithEnvFallback("", "FALLBACK_KEY"); got != "" {
+		t.Errorf("expected empty string when both empty, got %q", got)
+	}
+}
+
+func TestResolveTLSEnabled(t *testing.T) {
+	t.Setenv("REDPANDA_TLS_ENABLED", "")
+	if v, _ := resolveTLSEnabled(true); !v {
+		t.Error("YAML true should win")
+	}
+	if v, _ := resolveTLSEnabled(false); v {
+		t.Error("expected false when both unset")
+	}
+
+	t.Setenv("REDPANDA_TLS_ENABLED", "true")
+	if v, _ := resolveTLSEnabled(false); !v {
+		t.Error("expected env true")
+	}
+
+	t.Setenv("REDPANDA_TLS_ENABLED", "1")
+	if v, _ := resolveTLSEnabled(false); !v {
+		t.Error(`expected "1" to parse as true`)
+	}
+
+	t.Setenv("REDPANDA_TLS_ENABLED", "definitely-not-a-bool")
+	if _, err := resolveTLSEnabled(false); err == nil {
+		t.Error("expected error for non-bool env value")
 	}
 }
 
