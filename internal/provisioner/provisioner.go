@@ -21,6 +21,20 @@ type KafkaAdmin interface {
 	CreateACLs(ctx context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error)
 }
 
+// topicCacheInvalidator is implemented by admin clients that cache topic
+// metadata locally. The provisioner uses this to force a fresh broker query
+// when it detects that cached state has diverged from the broker's view
+// (e.g. after a stale-cache TopicAlreadyExists race).
+type topicCacheInvalidator interface {
+	PurgeTopicCache(topics ...string)
+}
+
+func (p *Provisioner) purgeTopicCache(topics ...string) {
+	if inv, ok := p.admin.(topicCacheInvalidator); ok {
+		inv.PurgeTopicCache(topics...)
+	}
+}
+
 // SchemaRegistry defines the schema registry operations needed by the provisioner.
 type SchemaRegistry interface {
 	RegisterSchema(ctx context.Context, subject, schemaType, schema string) (int, error)
