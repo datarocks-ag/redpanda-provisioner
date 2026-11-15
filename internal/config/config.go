@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -99,7 +98,8 @@ type Schema struct {
 //
 // Iterations is the SCRAM PBKDF2 iteration count and defaults to 4096
 // (the RFC 5802 minimum) when zero or unset. Raise it for FIPS-hardened
-// deployments; values below 4096 are rejected at config-load time.
+// deployments; values outside 4096 to 16384 are rejected at config-load
+// time.
 type User struct {
 	Username   string `yaml:"username"`
 	Password   string `yaml:"password"`
@@ -112,11 +112,11 @@ type User struct {
 // with UNACCEPTABLE_CREDENTIAL.
 const MinSCRAMIterations = 4096
 
-// MaxSCRAMIterations is the wire-level ceiling for the iteration count.
-// The Kafka AlterUserScramCredentials API encodes this field as int32, so
-// any larger value would silently overflow on the wire. The broker may
-// also impose a stricter cap of its own; this is just the protocol limit.
-const MaxSCRAMIterations = math.MaxInt32
+// MaxSCRAMIterations is the highest iteration count kadm accepts in
+// AlterUserSCRAMs (UpsertSCRAM.Iterations must be between 4096 and 16384).
+// Checking it at config load stops a run before anything is provisioned,
+// instead of failing at the users step after topics and schemas were done.
+const MaxSCRAMIterations = 16384
 
 // ACL defines a Kafka ACL entry to provision.
 type ACL struct {
@@ -530,7 +530,7 @@ func validateUsers(users []User) error {
 			return fmt.Errorf("%s.iterations: must be >= %d (RFC 5802 minimum), got %d", prefix, MinSCRAMIterations, u.Iterations)
 		}
 		if u.Iterations > MaxSCRAMIterations {
-			return fmt.Errorf("%s.iterations: must be <= %d (Kafka API int32 limit), got %d", prefix, MaxSCRAMIterations, u.Iterations)
+			return fmt.Errorf("%s.iterations: must be <= %d, got %d", prefix, MaxSCRAMIterations, u.Iterations)
 		}
 	}
 

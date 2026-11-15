@@ -212,13 +212,12 @@ users:
 | `username` | string | **required** | User name. Must be unique in the file. |
 | `password` | string | **required** | Must not be empty. Use `${VAR}` to keep it out of the file. |
 | `mechanism` | string | **required**, no default | `SCRAM-SHA-256` or `SCRAM-SHA-512`, uppercase. Clients must log in with the same mechanism. |
-| `iterations` | integer | `4096` | PBKDF2 iteration count. `0` or omitted means `4096`. Use a value from `4096` to `16384`; see below. |
+| `iterations` | integer | `4096` | PBKDF2 iteration count from `4096` to `16384`. `0` or omitted means `4096`. |
 
 - Users are created or updated on every run, so the password in the file is set again each
   time. Changing it in the file changes it in the cluster on the next run.
-- `iterations` below `4096` fails validation. Values above `16384` pass validation (the limit
-  there is `2147483647`) but fail when the user is provisioned:
-  `upserting SCRAM user: user svc: iterations 20000 is outside the allowed 4096 to 16384 range`.
+- `iterations` outside `4096` to `16384` fails validation before anything is provisioned:
+  `validating config: users[0].iterations: must be <= 16384, got 20000`.
 - Users removed from the file are **not** deleted.
 - The password never appears in the log.
 
@@ -360,8 +359,8 @@ Things to know:
   ```
 
 - **Not checked at load time:** whether schema files exist, whether the principal of an ACL is
-  well-formed, whether `replication_factor` fits the cluster, whether `iterations` is at most
-  `16384`, and whether the Schema Registry URL is set. These fail during the run, after earlier resources were already provisioned.
+  well-formed, whether `replication_factor` fits the cluster, and whether the Schema Registry
+  URL is set. These fail during the run, after earlier resources were already provisioned.
 - There is no dry-run or validate-only mode. To check a config without a cluster, run the
   provisioner against an unreachable broker: config errors appear immediately. A valid config
   logs `Configuration loaded` and then `Redpanda not ready, retrying`; stop it with Ctrl+C.
