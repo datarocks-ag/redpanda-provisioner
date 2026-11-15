@@ -1,6 +1,6 @@
 services:
   redpanda:
-    image: redpandadata/redpanda:v24.3.1
+    image: redpandadata/redpanda:v26.1.6
     command:
       - redpanda start
       - --smp 1
@@ -27,10 +27,14 @@ services:
     environment:
       REDPANDA_BROKERS: redpanda:9092
       SCHEMA_REGISTRY_URL: http://redpanda:8081
-      REDPANDA_CONFIG_PATH: /config.yaml
+      REDPANDA_CONFIG_PATH: /config/config.yaml
       LOG_LEVEL: info
+      ORDERS_SERVICE_PASSWORD: orders-dev-password   # development only; use a secret elsewhere
     volumes:
-      - ./config.example.yaml:/config.yaml:ro
+      # Schema file paths resolve against the config file's directory, so the
+      # schemas/ directory is mounted next to the config.
+      - ./config.example.yaml:/config/config.yaml:ro
+      - ./schemas:/config/schemas:ro
 
 volumes:
   redpandadata:

@@ -7,6 +7,32 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+
+- **Documentation moved to `docs/`** — the README now holds a short
+  introduction, a quick start and a documentation index. New: getting
+  started guide, how-it-works concepts, configuration reference,
+  deployment guide, FAQ, upgrade guide for 2.0, and fifteen task how-tos
+  under `docs/howto/` (service users and ACLs, secrets and password
+  rotation, secured clusters, Docker Compose and Kubernetes, topic
+  settings and partitions, schema registration and evolution).
+- **Retry documentation corrected** — the 5-minute connection timeout
+  applies to the broker and the Schema Registry separately, and it ends
+  the retries before the 15-retry limit is reached.
+- **2.0.0 entry correction** — `REDPANDA_TLS_ENABLED` accepts the values
+  of Go's `strconv.ParseBool` (`1`, `t`, `true`, `TRUE`, … and their
+  false forms); `yes` is rejected, not accepted as stated below.
+
+### Fixed
+
+- **Docker Compose quick start** — `docker compose up` failed: the
+  example config needed `ORDERS_SERVICE_PASSWORD`, asked for replication
+  factor 3 on a single broker, and referenced a schema file that was not
+  in the repository. The compose file now sets a development password,
+  mounts `schemas/` next to the config and runs Redpanda v26.1.6 (the
+  previous v24.3.1 rejected the SCRAM user upsert); `config.example.yaml`
+  uses replication factor 1, and `schemas/orders.avsc` is added.
+
 ## [2.0.0] — 2026-04-25
 
 > **Breaking change.** Unresolved `${VAR}` references in YAML config now
