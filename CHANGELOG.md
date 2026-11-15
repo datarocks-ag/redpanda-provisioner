@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-11-15
+
 ### Changed
 
 - **Documentation moved to `docs/`** — the README now holds a short
@@ -36,6 +38,19 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   mounts `schemas/` next to the config and runs Redpanda v26.1.6 (the
   previous v24.3.1 rejected the SCRAM user upsert); `config.example.yaml`
   uses replication factor 1, and `schemas/orders.avsc` is added.
+
+### Maintenance
+
+- **Go 1.27** — the module, CI and the Docker build image move from Go
+  1.25 to 1.27; golangci-lint moves from v2.10.1 to v2.15.0. (#57)
+- Bump dependencies: franz-go 1.21.0 → 1.22.3, kadm 1.18.0 → 1.20.0,
+  kmsg 1.13.1 → 1.15.1, testcontainers-go 0.42.0 → 0.45.0, and
+  golang.org/x/crypto 0.50.0 → 0.58.0; GitHub Actions checkout, setup-go and
+  codecov-action to v7, docker/login-action to v4.8.0. (#31–#41, #57,
+  #59, #60)
+- **Dependabot grouping** — Go module updates are grouped (testcontainers,
+  franz-go, security) and all GitHub Actions updates arrive as one PR.
+  (#58, #61)
 
 ## [2.0.0] — 2026-04-25
 
@@ -139,6 +154,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 Initial release.
 
-[Unreleased]: https://github.com/datarocks-ag/redpanda-provisioner/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/datarocks-ag/redpanda-provisioner/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/datarocks-ag/redpanda-provisioner/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/datarocks-ag/redpanda-provisioner/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/datarocks-ag/redpanda-provisioner/releases/tag/v1.0.0
