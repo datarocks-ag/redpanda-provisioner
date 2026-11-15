@@ -3,166 +3,136 @@
 [![CI](https://github.com/datarocks-ag/redpanda-provisioner/actions/workflows/ci.yaml/badge.svg)](https://github.com/datarocks-ag/redpanda-provisioner/actions/workflows/ci.yaml)
 ![coverage](https://raw.githubusercontent.com/datarocks-ag/redpanda-provisioner/badges/.badges/develop/coverage.svg)
 
-A Go CLI tool that idempotently provisions Redpanda/Kafka resources from a YAML config file. Designed as a Docker Compose init container or Kubernetes Job.
+Declarative, idempotent provisioning for Redpanda and other Kafka-compatible brokers. Describe
+the topics, Schema Registry schemas, SASL/SCRAM users and access control lists (ACLs) your
+services need in one YAML file; the provisioner creates what is missing, updates what it
+can, and then exits.
 
-## Features
+It is built to run **before your application starts**: as a Docker Compose service your app
+`depends_on`, or as a Kubernetes Job.
 
-- Idempotent provisioning of topics, schemas, SASL users, and ACLs
-- YAML config with `${VAR}` environment variable expansion
-- Configurable strategy: `update` (default) or `create` (skip existing)
-- Schema Registry support (Avro, Protobuf, JSON Schema)
-- SASL/SCRAM authentication (SCRAM-SHA-256, SCRAM-SHA-512)
-- ACL management with literal and prefixed patterns
-- Exponential backoff retry for broker and schema registry connectivity
-- Structured JSON logging via `log/slog`
-- Never deletes topics, schemas, users, or ACLs not in config
-- Never decreases partition count (warns on mismatch)
+## Why
 
-## Quick Start
+Every service needs the same few things from the broker: its topics with the right
+partitions and retention, a registered schema, a login, and ACLs that let it produce and
+consume what it should and nothing else. Usually that ends up in a shell script full of
+`rpk` calls, in manual console sessions, or in the application creating topics on startup
+with far more rights than it needs.
 
-```bash
-docker compose up
-```
+redpanda-provisioner replaces that with a file you can review in a pull request:
 
-This starts Redpanda and runs the provisioner with the example config.
+- **Idempotent** — run it on every deploy. Missing resources are created; existing topics
+  get more partitions and changed config values, and schemas, users and ACLs are upserted.
+- **Additive and safe** — it never deletes topics, schemas, users or ACLs, and never
+  decreases a topic's partition count.
+- **Secret-friendly** — `${VAR}` references keep passwords out of the file, and an unset
+  variable stops the run instead of becoming a literal password.
+- **Patient** — it waits for the broker and Schema Registry with exponential backoff, so it
+  needs no `wait-for-it` script.
+- **Small** — a single static binary in a `scratch` image.
 
-## Configuration
+## Quick start
 
-Connection details can be set in YAML (`broker:` and `schema_registry:`
-blocks) or via environment variables. **YAML wins when set; env vars fill in
-the rest** — so existing env-only deployments keep working unchanged. You
-can also embed env references inside YAML strings using `${VAR}` or
-`${VAR:-default}`.
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `REDPANDA_BROKERS` | no | `localhost:9092` | Comma-separated broker addresses |
-| `REDPANDA_SASL_USERNAME` | no | — | SASL username |
-| `REDPANDA_SASL_PASSWORD` | no | — | SASL password |
-| `REDPANDA_SASL_MECHANISM` | no | `SCRAM-SHA-256` | SCRAM-SHA-256 or SCRAM-SHA-512 |
-| `REDPANDA_TLS_ENABLED` | no | `false` | Enable TLS (any value `strconv.ParseBool` understands) |
-| `SCHEMA_REGISTRY_URL` | no | — | Schema Registry URL (required if schemas are configured) |
-| `SCHEMA_REGISTRY_USERNAME` | no | — | HTTP basic-auth user for SR |
-| `SCHEMA_REGISTRY_PASSWORD` | no | — | HTTP basic-auth password for SR |
-| `REDPANDA_CONFIG_PATH` | no | `./config.yaml` | Path to YAML config |
-| `LOG_LEVEL` | no | `info` | Log level (debug/info/warn/error) |
-
-All auth variables are optional (dev environments often have no auth).
-
-### YAML connection block
+Two files next to each other. A config:
 
 ```yaml
-broker:
-  addresses:
-    - redpanda:9092
-  sasl:
-    mechanism: SCRAM-SHA-256
-    username: ${REDPANDA_ADMIN_USERNAME}
-    password: ${REDPANDA_ADMIN_PASSWORD}
-  tls:
-    enabled: false
-
-schema_registry:
-  url: http://redpanda:8081
-  username: ${SR_USERNAME:-}
-  password: ${SR_PASSWORD:-}
-```
-
-## Strategy
-
-Control whether existing resources are updated or skipped using the `strategy` field:
-
-- `update` (default) — create resources if missing, update if they already exist
-- `create` — create resources if missing, skip if they already exist
-
-Strategy can be set globally or per topic. Per-topic strategy overrides the global setting.
-
-```yaml
-strategy: "create"              # global: skip existing resources
-
+# config.yaml
 topics:
   - name: orders
-    strategy: "update"          # override: always reconcile this topic
-    partitions: 6
-    replication_factor: 3
-```
-
-**Note:** Users, ACLs, and schemas are always upserted idempotently — strategy applies to topics only.
-
-## Environment Variable Expansion
-
-String values support `${VAR}` and `${VAR:-default}` syntax. The variable
-name must match `[A-Za-z_][A-Za-z0-9_]*` (POSIX env var rules).
-
-- `${VAR}` — replaced with the env var value. If the env var is **unset and
-  no default is provided**, config-load fails with an error pointing at the
-  offending field. This is a deliberate fail-closed design: silently leaving
-  the literal `"${PASSWORD}"` in a credential field used to mask itself as
-  an unrelated broker error.
-- `${VAR:-fallback}` — replaced with the env var if set, otherwise the
-  literal `fallback`.
-- `${VAR:-}` — explicit "may be empty" escape hatch.
-
-```yaml
-users:
-  - username: orders-service
-    password: ${ORDERS_SERVICE_PASSWORD}    # required: load fails if unset
-
-schema_registry:
-  password: ${SR_PASSWORD:-}                # optional: empty if unset
-
-strategy: ${STRATEGY:-update}               # default: update
-```
-
-## Provisioning Order
-
-Resources are provisioned in dependency order:
-
-1. **Topics** — looked up by name; created if not found, updated if they exist
-2. **Schemas** — registered with Schema Registry (naturally idempotent); compatibility level set if specified
-3. **Users** — SASL/SCRAM users upserted via `AlterUserSCRAMs`
-4. **ACLs** — created via `CreateACLs` (idempotent in Kafka protocol)
-
-## Config Example
-
-See [config.example.yaml](config.example.yaml) for a full example.
-
-```yaml
-topics:
-  - name: orders
-    partitions: 6
-    replication_factor: 3
-    config:
-      retention.ms: "259200000"
-      cleanup.policy: delete
-      min.insync.replicas: "2"
-      compression.type: zstd
-
-schemas:
-  - subject: orders-value
-    type: avro                  # avro | protobuf | json
-    file: schemas/orders.avsc
-    compatibility: BACKWARD
+    partitions: 3
+    replication_factor: 1
 
 users:
   - username: orders-service
     password: ${ORDERS_SERVICE_PASSWORD}
-    mechanism: SCRAM-SHA-256    # SCRAM-SHA-256 | SCRAM-SHA-512
+    mechanism: SCRAM-SHA-256
 
 acls:
   - principal: "User:orders-service"
     operations: [write, describe]
-    resource_type: topic        # topic | group | cluster | transactional_id
+    resource_type: topic
     resource_name: orders
-    pattern: literal            # literal | prefixed
-    permission: allow           # allow | deny
+    pattern: literal
+    permission: allow
 ```
 
-## Connection Retry
+And a Compose file that runs the provisioner once Redpanda is healthy:
 
-On startup, the tool retries connecting to the broker and schema registry with exponential backoff (1s initial, 30s cap, 15 retries, 5min total timeout). This handles Docker Compose startup ordering without requiring `wait-for-it` scripts.
+```yaml
+# docker-compose.yaml
+services:
+  redpanda:
+    image: redpandadata/redpanda:v26.1.6
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092
+      - --advertise-kafka-addr internal://redpanda:9092
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda-provisioner:
+    image: ghcr.io/datarocks-ag/redpanda-provisioner:2.0
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      REDPANDA_BROKERS: redpanda:9092
+      REDPANDA_CONFIG_PATH: /config.yaml
+      ORDERS_SERVICE_PASSWORD: orders-dev-password
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+```
+
+```console
+$ docker compose up redpanda-provisioner
+...
+{"level":"INFO","msg":"Creating topic","topic":"orders","partitions":3,"replication_factor":1}
+{"level":"INFO","msg":"SCRAM user ensured","username":"orders-service"}
+{"level":"INFO","msg":"Ensuring ACL","principal":"User:orders-service","operations":["write","describe"],…}
+{"level":"INFO","msg":"redpanda-provisioner finished successfully"}
+```
+
+Run it again and the topic is left as it is; the user and the ACL are upserted unchanged.
+The [getting started guide](docs/getting-started.md) takes this further with a registered
+schema, a consumer group and checks with `rpk`. The repository's own
+[docker-compose.yaml](docker-compose.yaml) runs the fuller
+[config.example.yaml](config.example.yaml).
+
+## Documentation
+
+Read in this order if you're new; jump straight to a how-to if you know what you need.
+
+| | |
+|---|---|
+| **[Getting started](docs/getting-started.md)** | A guided tour: from an empty Redpanda to topics, a schema, a service user and its ACLs. |
+| **[How it works](docs/concepts.md)** | The model behind a run: what gets reconciled, what is never touched, the order of steps, `strategy`, retries. |
+| **How-to guides** | Task-focused stories: |
+| &nbsp;&nbsp;[Create a producer service user](docs/howto/create-a-producer-user.md) | A SCRAM login that can write to its topics and nothing else. |
+| &nbsp;&nbsp;[Create a consumer service user with a consumer group](docs/howto/create-a-consumer-user.md) | Read access to a topic plus the consumer group it commits offsets to. |
+| &nbsp;&nbsp;[Grant access to all topics with a prefix](docs/howto/grant-access-by-topic-prefix.md) | One prefixed ACL instead of one per topic. |
+| &nbsp;&nbsp;[Allow idempotent and transactional producers](docs/howto/allow-transactional-producers.md) | Transactional ID ACLs, and when cluster `idempotent_write` matters. |
+| &nbsp;&nbsp;[Revoke an ACL or remove a user](docs/howto/revoke-access.md) | The manual steps, since the provisioner never deletes. |
+| &nbsp;&nbsp;[Set up the provisioner's admin account](docs/howto/set-up-the-provisioner-admin-account.md) | The SASL account the provisioner itself connects with. |
+| &nbsp;&nbsp;[Keep passwords out of the config file](docs/howto/manage-secrets.md) | `${VAR}` references, Docker and Kubernetes secrets. |
+| &nbsp;&nbsp;[Rotate a service user's password](docs/howto/rotate-a-user-password.md) | Change a SCRAM password without surprises for the clients. |
+| &nbsp;&nbsp;[Connect to a SASL- and TLS-secured cluster and Schema Registry](docs/howto/connect-to-a-secured-cluster.md) | SCRAM, TLS and Schema Registry basic auth, and what isn't supported. |
+| &nbsp;&nbsp;[Run the provisioner before your app in Docker Compose](docs/howto/run-in-docker-compose.md) | `service_completed_successfully`, mounted schemas, secrets. |
+| &nbsp;&nbsp;[Run the provisioner as a Kubernetes Job](docs/howto/run-as-a-kubernetes-job.md) | ConfigMap, Secret, security context and re-runs. |
+| &nbsp;&nbsp;[Change a topic's settings](docs/howto/change-topic-settings.md) | Retention and other topic config, and what a removed key does. |
+| &nbsp;&nbsp;[Add partitions to a topic](docs/howto/add-partitions-to-a-topic.md) | Increase only, and what it means for keyed messages. |
+| &nbsp;&nbsp;[Register Avro, Protobuf or JSON schemas](docs/howto/register-a-schema.md) | Schema files, subjects and compatibility levels. |
+| &nbsp;&nbsp;[Evolve a schema safely](docs/howto/evolve-a-schema.md) | New versions, compatibility checks and the 409 error. |
+| **[Deployment](docs/deployment.md)** | Docker Compose, Kubernetes, the container image, environment variables, logging, exit codes. |
+| **[Configuration reference](docs/configuration.md)** | Every field of the YAML file, `${VAR}` expansion, validation. |
+| **[FAQ](docs/faq.md)** | Questions and error messages people run into. |
+| **[Upgrading to 2.0](docs/upgrading-to-2.0.md)** | Breaking changes and how to migrate from 1.x. |
+| **[Changelog](CHANGELOG.md)** | What changed in each release. |
 
 ## Development
 
@@ -172,54 +142,8 @@ make test             # Run unit tests
 make test-integration # Run integration tests (requires Docker)
 make lint             # Run golangci-lint
 make vet              # Run go vet
-make docker           # Build Docker image
-```
-
-## Docker Compose Usage
-
-```yaml
-services:
-  redpanda:
-    image: redpandadata/redpanda:v24.3.1
-    command:
-      - redpanda start
-      - --smp 1
-      - --memory 512M
-      - --overprovisioned
-      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
-      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
-    ports: ["19092:19092", "18081:18081"]
-    volumes: [redpandadata:/var/lib/redpanda/data]
-    healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
-  redpanda-provisioner:
-    image: ghcr.io/datarocks-ag/redpanda-provisioner:latest
-    depends_on:
-      redpanda: { condition: service_healthy }
-    environment:
-      REDPANDA_BROKERS: redpanda:9092
-      SCHEMA_REGISTRY_URL: http://redpanda:8081
-      REDPANDA_CONFIG_PATH: /config.yaml
-    volumes:
-      - ./config.example.yaml:/config.yaml:ro
-
-  app:
-    image: your-app
-    depends_on:
-      redpanda-provisioner:
-        condition: service_completed_successfully
-
-volumes:
-  redpandadata:
-```
-
-## Container Image
-
-```bash
-docker pull ghcr.io/datarocks-ag/redpanda-provisioner:latest
+make fmt              # Format the code
+make mod-tidy         # Tidy go.mod and go.sum
+make docker           # Build Docker image (tagged redpanda-provisioner)
+make clean            # Remove the built binary
 ```
