@@ -1,5 +1,6 @@
-# Strategy: "update" (default) creates or updates resources.
-#           "create" only creates if missing, skips existing.
+# Strategy applies to topics only (schemas, users and ACLs are always upserted).
+#   "update" (default) creates missing topics and updates existing ones.
+#   "create" only creates missing topics and skips existing ones.
 # Set globally or per topic (topic strategy overrides global).
 # strategy: "update"
 
@@ -26,30 +27,31 @@
 topics:
   - name: orders
     partitions: 6
-    replication_factor: 3
+    replication_factor: 1         # the bundled docker-compose.yaml runs one broker; use 3 in production
     config:
       retention.ms: "259200000"
       cleanup.policy: delete
-      min.insync.replicas: "2"
+      min.insync.replicas: "1"     # keep at or below replication_factor; use 2 with replication_factor 3
       compression.type: zstd
 
   - name: user-state
     partitions: 6
-    replication_factor: 3
+    replication_factor: 1
     config:
       cleanup.policy: compact
-      min.insync.replicas: "2"
+      min.insync.replicas: "1"
 
 schemas:
   - subject: orders-value
     type: avro
-    file: schemas/orders.avsc
+    file: schemas/orders.avsc   # relative to this file's directory
     compatibility: BACKWARD
 
 users:
   - username: orders-service
     password: ${ORDERS_SERVICE_PASSWORD}
-    mechanism: SCRAM-SHA-256
+    mechanism: SCRAM-SHA-256      # required: SCRAM-SHA-256 | SCRAM-SHA-512
+    # iterations: 4096            # PBKDF2 iterations; 0 or unset means 4096 (the minimum)
 
 acls:
   - principal: "User:orders-service"
