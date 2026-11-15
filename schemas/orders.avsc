@@ -1,0 +1,11 @@
+{
+  "type": "record",
+  "name": "Order",
+  "namespace": "com.example.orders",
+  "fields": [
+    { "name": "order_id", "type": "string" },
+    { "name": "customer_id", "type": "string" },
+    { "name": "amount_cents", "type": "long" },
+    { "name": "created_at", "type": { "type": "long", "logicalType": "timestamp-millis" } }
+  ]
+}
