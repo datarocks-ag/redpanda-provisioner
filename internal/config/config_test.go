@@ -538,20 +538,46 @@ users:
 	}
 }
 
-func TestValidateUserIterationsAboveInt32Rejected(t *testing.T) {
-	// 2^31 = 2147483648, one past math.MaxInt32 (2147483647). Without the
-	// upper bound this would silently overflow when cast to int32.
+func TestValidateUserIterationsAboveMaximumRejected(t *testing.T) {
+	// kadm rejects iteration counts above 16384 when the user is upserted,
+	// after topics and schemas were already provisioned. Validation must
+	// catch it at config load instead.
+	for _, iterations := range []string{"16385", "2147483648"} {
+		t.Run(iterations, func(t *testing.T) {
+			yaml := `
+users:
+  - username: svc
+    password: pass
+    mechanism: SCRAM-SHA-256
+    iterations: ` + iterations + `
+`
+			path := writeTempConfig(t, yaml)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error for iterations %s > %d", iterations, MaxSCRAMIterations)
+			}
+			if !strings.Contains(err.Error(), "users[0].iterations") {
+				t.Errorf("expected error to point at users[0].iterations, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateUserIterationsAtMaximumAccepted(t *testing.T) {
 	yaml := `
 users:
   - username: svc
     password: pass
     mechanism: SCRAM-SHA-256
-    iterations: 2147483648
+    iterations: 16384
 `
 	path := writeTempConfig(t, yaml)
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected error for iterations > MaxInt32")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected iterations=16384 to be accepted, got: %v", err)
+	}
+	if cfg.Users[0].Iterations != 16384 {
+		t.Errorf("expected iterations 16384, got %d", cfg.Users[0].Iterations)
 	}
 }
 

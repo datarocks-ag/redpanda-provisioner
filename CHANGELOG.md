@@ -25,6 +25,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **`users[].iterations` above 16384 is rejected at config load** — the
+  limit was the int32 maximum, but the Kafka admin client (kadm) refuses
+  more than 16384, so such a value failed only at the users step, after
+  topics and schemas had already been provisioned.
 - **Docker Compose quick start** — `docker compose up` failed: the
   example config needed `ORDERS_SERVICE_PASSWORD`, asked for replication
   factor 3 on a single broker, and referenced a schema file that was not
