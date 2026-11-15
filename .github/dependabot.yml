@@ -6,6 +6,25 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
+    groups:
+      # testcontainers-go and its redpanda module are released together and must be
+      # bumped together; separate PRs conflict on go.mod/go.sum.
+      testcontainers:
+        patterns:
+          - "github.com/testcontainers/testcontainers-go*"
+      # franz-go, kadm and kmsg are released from one monorepo and share dependency
+      # bumps (franz-go 1.22.1 and kadm 1.19.0 both moved to compress 1.20.0);
+      # separate PRs conflict on go.mod/go.sum.
+      franz-go:
+        patterns:
+          - "github.com/twmb/franz-go*"
+      # Security updates mostly hit indirect dependencies pulled in by testcontainers
+      # and the golangci-lint tool (otel, moby, compress). One PR per CVE produced a
+      # pile of conflicting go.sum changes, so batch them.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
@@ -13,6 +32,21 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci"
+    groups:
+      # checkout/setup-go/upload-artifact are used in every job of both workflows.
+      github-actions:
+        patterns:
+          - "actions/*"
+      # buildx, build-push, login and metadata are used together in release.yaml.
+      docker-actions:
+        patterns:
+          - "docker/*"
+    ignore:
+      # Dependabot proposed a non-existent major "v2201" for this action in
+      # postgres-provisioner, which broke its release workflow. Major updates need a
+      # manual review.
+      - dependency-name: "vladopajic/go-test-coverage"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /
